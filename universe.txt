@@ -1,0 +1,2 @@
+# name kind r r r v v v a a a allegiance [capabilities ...]
+test1 ship 0 0 0 0 0 1 0 0.003 0 defenders engine tank 23 1
