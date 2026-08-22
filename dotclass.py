@@ -2,7 +2,9 @@ import numpy as np
 import sys
 
 class Command:
-    NAV, SCAN, CAPTURE, FIRE, LOAD, JETTISON = range(6)
+    NAV, SCAN, CAPTURE, FIRE, LOAD, JETTISON, DETONATE = range(7)
+    names = ['NAV', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'JETTISON', 'DETONATE']
+    span = range(7)
     def __init__(self, cmd, actor, parameters):
         self. cmd = cmd
         self.actor = actor

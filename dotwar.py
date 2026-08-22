@@ -14,6 +14,7 @@ except ValueError:
     endtime = int(args[3])
 
 entities = []
+
 with open(universe, 'r') as universe_file:
     for ln in universe_file.readlines():
         if ln.startswith("#"): continue
@@ -52,6 +53,30 @@ with open(universe, 'r') as universe_file:
             capindex += skip
         e = Entity(ename, ekind, er, ev, ea, eallegiance, ecaps)
         entities.append(e)
+if orders:
+    with open(orders, 'r') as orders_file:
+        for ln in orders_file.readlines():
+            if ln.startswith('#'): continue
+            else:
+                cvessel, ctime, ctype, cargs = None, None, None, {}
+                tokens = ln.split()
+                consttokens = tokens[0:3]
+                cvessel = consttokens[0]
+                ctime = consttokens[1]
+                ctype = consttokens[2]
+                argtokens  = tokens[4:]
+                if ctype == "NAV":
+                    ctype = Command.NAV
+                    cargs["a"] = np.array([float(a) for a in argtokens[0:3]])
+                else:
+                    raise Exception(f"unknown command {ctype}")
+                actor = tuple(filter(lambda e: e.name == cvessel, entities))
+                if actor: actor = actor[0]
+                else:
+                    raise Exception(f"no entity named {cvessel} for command {ln}")
+                actor: Entity = actor
+                command = Command(ctype, actor, cargs)
+                actor.orders.append(command)
 
 sim = Simulation(0, entities, [])
 sim.run(endtime)
