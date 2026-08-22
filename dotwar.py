@@ -62,7 +62,7 @@ if orders:
                 tokens = ln.split()
                 consttokens = tokens[0:3]
                 cvessel = consttokens[0]
-                ctime = consttokens[1]
+                ctime = float(consttokens[1])
                 ctype = consttokens[2]
                 argtokens  = tokens[4:]
                 if ctype == "NAV":
@@ -75,7 +75,7 @@ if orders:
                 else:
                     raise Exception(f"no entity named {cvessel} for command {ln}")
                 actor: Entity = actor
-                command = Command(ctype, actor, cargs)
+                command = Command(ctype, ctime, actor, cargs)
                 actor.orders.append(command)
 
 sim = Simulation(0, entities, [])

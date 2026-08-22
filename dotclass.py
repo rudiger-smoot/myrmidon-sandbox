@@ -1,12 +1,30 @@
 import numpy as np
 import sys
 
+class Entity:
+    def __init__(self, name, kind, r, v, a, allegiance, capabilities):
+        self.name = name
+        self.kind = kind
+        self.r, self.v, self.a = r, v, a
+        self.allegiance = allegiance
+        self.capabilities = capabilities
+        self.orders = []
+
+        fc = {}
+        for k in self.capabilities:
+            if k in Capability.names:
+                fc[Capability.names.index(k)] = self.capabilities[k]
+            elif k in Capability.span:
+                fc[k] = self.capabilities[k]
+        self.capabilities = fc
+
 class Command:
     NAV, SCAN, CAPTURE, FIRE, LOAD, JETTISON, DETONATE = range(7)
     names = ['NAV', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'JETTISON', 'DETONATE']
     span = range(7)
-    def __init__(self, cmd, actor, parameters):
-        self. cmd = cmd
+    def __init__(self, cmd, time: float, actor: Entity, parameters):
+        self.cmd = cmd
+        self.time = time
         self.actor = actor
         self.parameters = parameters
 
@@ -41,24 +59,6 @@ def motion(v: np.array, a: np.array, t: float) -> tuple:
     dv = [a[0]*t, a[1]*t, a[2]*t]
     return np.array(dr), np.array(dv)
 
-class Entity:
-    def __init__(self, name, kind, r, v, a, allegiance, capabilities):
-        self.name = name
-        self.kind = kind
-        self.r, self.v, self.a = r, v, a
-        self.allegiance = allegiance
-        self.capabilities = capabilities
-        self.orders = []
-
-        fc = {}
-        for k in self.capabilities:
-            if k in Capability.names:
-                fc[Capability.names.index(k)] = self.capabilities[k]
-            elif k in Capability.span:
-                fc[k] = self.capabilities[k]
-        self.capabilities = fc
-
-
 class Simulation:
     def __init__(self, time, entities: list[Entity], orders: list[Command]):
         self.time = time
@@ -91,14 +91,14 @@ class Simulation:
     def run(self, interval = 0):
         state_changes = {(self.time, -1, None), (self.time+interval, -1, None)}
         state_changes.update(self.state_eval)
-        state_changes = sorted(state_changes, key= lambda s: s[0])
-        new_events = []
         orders = []
         for e in self.entities:
             for o in e.orders:
                 if self.time <= o.time <= (self.time + interval):
                     orders.append(o)
                     state_changes.add((o.time, o, e))
+        state_changes = sorted(state_changes, key= lambda s: s[0])
+        new_events = []
         state_changes = filter(lambda sc: sc[0] <= self.time+interval, state_changes)
         now = self.time
         last_start = self.time
