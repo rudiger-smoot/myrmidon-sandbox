@@ -26,7 +26,6 @@ with open(universe, 'r') as universe_file:
         er = np.array([float(r) for r in consttokens[2:2+3]])
         ev = np.array([float(v) for v in consttokens[5:5+3]])
         ea = np.array([float(a) for a in consttokens[8:8+3]])
-        print(ev)
         eallegiance = consttokens[9]
         captokens = [token.upper() for token in tokens[10:]]
         capindex = 0
@@ -64,10 +63,10 @@ if orders:
                 cvessel = consttokens[0]
                 ctime = float(consttokens[1])
                 ctype = consttokens[2]
-                argtokens  = tokens[4:]
+                argtokens  = tokens[3:]
                 if ctype == "NAV":
-                    ctype = Command.NAV
-                    cargs["a"] = np.array([float(a) for a in argtokens[0:3]])
+                    ctype = Command.BURN
+                    cargs["a"] = np.array([float(a) for a in argtokens[0:4]])
                 else:
                     raise Exception(f"unknown command {ctype}")
                 actor = tuple(filter(lambda e: e.name == cvessel, entities))

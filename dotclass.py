@@ -1,5 +1,10 @@
+import math
+
+import numpy
 import numpy as np
 import sys
+
+FDV_PREDICTION_ABSOLUTE_TOLERANCE = 3.552713678800501e-15
 
 class Entity:
     def __init__(self, name, kind, r, v, a, allegiance, capabilities):
@@ -19,8 +24,8 @@ class Entity:
         self.capabilities = fc
 
 class Command:
-    NAV, SCAN, CAPTURE, FIRE, LOAD, JETTISON, DETONATE = range(7)
-    names = ['NAV', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'JETTISON', 'DETONATE']
+    BURN, SCAN, CAPTURE, FIRE, LOAD, JETTISON, DETONATE = range(7)
+    names = ['BURN', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'JETTISON', 'DETONATE']
     span = range(7)
     def __init__(self, cmd, time: float, actor: Entity, parameters):
         self.cmd = cmd
@@ -29,8 +34,8 @@ class Command:
         self.parameters = parameters
 
 class Event:
-    NAV, SCAN, CAPTURE, FIRE, LOAD, UNLOAD, JETTISON, NO_FUEL, DETONATE, SPAWN = range(10)
-    names = ['NAV', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'UNLOAD', 'JETTISON', 'NO_FUEL', 'DETONATE', 'SPAWN']
+    BURN, SCAN, CAPTURE, FIRE, LOAD, UNLOAD, JETTISON, NO_FUEL, DETONATE, SPAWN = range(10)
+    names = ['BURN', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'UNLOAD', 'JETTISON', 'NO_FUEL', 'DETONATE', 'SPAWN']
     def __init__(self, time, evt, entity, parameters):
         self.time = time
         self.evt = evt
@@ -45,7 +50,7 @@ class Capability:
     span = range(5)
     names = ['ENGINE', 'TANK', 'BAY', 'REFINE', 'DETONATE']
 
-cap_orders = {Capability.ENGINE: [Command.NAV, Command.SCAN, Command.CAPTURE],
+cap_orders = {Capability.ENGINE: [Command.BURN, Command.SCAN, Command.CAPTURE],
               Capability.TANK:   [Command.LOAD, Command.JETTISON],
               Capability.BAY:    [Command.FIRE]}
 
@@ -79,6 +84,7 @@ class Simulation:
                 time_to_exhaustion = fuel / mag(e.a)
                 prediction = (self.time + time_to_exhaustion, Event.NO_FUEL, e)
                 predictions.add(prediction)
+        print(f" T={self.time} adding predictions", predictions)
         return predictions
 
     def entities_with_capability(self, capabilities):
@@ -94,17 +100,21 @@ class Simulation:
         orders = []
         for e in self.entities:
             for o in e.orders:
+                o: Command = o
                 if self.time <= o.time <= (self.time + interval):
                     orders.append(o)
                     state_changes.add((o.time, o, e))
         state_changes = sorted(state_changes, key= lambda s: s[0])
         new_events = []
-        state_changes = filter(lambda sc: sc[0] <= self.time+interval, state_changes)
+        state_changes = list(filter(lambda sc: sc[0] <= self.time+interval, state_changes))
         now = self.time
         last_start = self.time
-        for change_time, reason, entity in state_changes:
-
+        interval_end = now + interval
+        while state_changes:
+            change_time, reason, entity = state_changes.pop(0)
             now = change_time
+            self.time = now
+            exhausted_entities = set()
             for e in self.entities:
                 dr, dv = motion(e.v, e.a, now - last_start)
                 e.r = e.r + dr
@@ -117,15 +127,37 @@ class Simulation:
                 print(f"t={now} processing prediction: {entity.name} fuel exhaustion")
                 if Capability.TANK in entity.capabilities:
                     e_fuel = entity.capabilities[Capability.TANK]["current"]
-                    if e_fuel <= 0:
+                    if e_fuel <= 0 or math.isclose(e_fuel, 0, abs_tol=FDV_PREDICTION_ABSOLUTE_TOLERANCE):
                         print(f" prediction true {entity.name} at {e_fuel}fdv")
                         entity.capabilities[Capability.TANK]["current"] = 0
                         new_events.append(
                             Event(now, Event.NO_FUEL, entity, {})
                         )
-                        entity.a = np.array((0,0,0))
+                        exhausted_entities.add(entity)
                     else:
                         print(f" prediction false {entity.name} fuel={e_fuel}fdv")
+            if isinstance(reason, Command):
+                if reason.cmd == Command.BURN:
+                    print("executing burn")
+                    reason: Command = reason
+                    entity = reason.actor
+                    a = reason.parameters["a"]
+                    print(f"t={reason.time} burning {a}")
+                    entity.a = a #todo: add acceleration limits
+                    new_events.append(Event(now, Event.BURN, entity, reason.parameters))
+                    predictions = self.predict_fuel_exhaustion()
+                    #todo: generalize "stuff changed, add new predictions" logic.
+                    self.state_eval.update(predictions)  # OLD FUEL EXHAUSTION PREDICTIONS INVALID!
+                    for p in predictions:
+                        predicted_time = p[0]
+                        if predicted_time < interval_end:
+                            # IMPORTANT CAVEAT CREATED by '<' ! for interval x, only events at start <= t < start+x are processed.
+                            # add to stack of unprocessed predictions in this interval's responsibility
+                            state_changes.append(p)
+                        state_changes = sorted(state_changes, key=lambda s: s[0])
+            for e in exhausted_entities:
+                # Exhaust acceleration after other orders processed so can't burn at same instant as you run out of fuel
+                e.a = np.array((0, 0, 0))
             last_start = now
         self.events += new_events
         self.time = now
