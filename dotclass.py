@@ -4,7 +4,7 @@ import numpy
 import numpy as np
 import sys
 
-FDV_PREDICTION_ABSOLUTE_TOLERANCE = 3.552713678800501e-15
+FDV_PREDICTION_ABSOLUTE_TOLERANCE = 1e-12 #todo: APPROXIMATION
 
 class Entity:
     def __init__(self, name, kind, r, v, a, allegiance, capabilities):
@@ -22,6 +22,13 @@ class Entity:
             elif k in Capability.span:
                 fc[k] = self.capabilities[k]
         self.capabilities = fc
+
+    def time_til_fuel_exhaustion(self):
+        fuel = self.capabilities[Capability.TANK]["current"]
+        if mag(self.a):
+            time_to_exhaustion = fuel / mag(self.a)
+        else: time_to_exhaustion = None
+        return time_to_exhaustion
 
 class Command:
     BURN, SCAN, CAPTURE, FIRE, LOAD, JETTISON, DETONATE = range(7)
@@ -80,8 +87,7 @@ class Simulation:
         predictions = set()
         for e in fuel_users:
             if mag(e.a) > 0:
-                fuel = e.capabilities[Capability.TANK]["current"]
-                time_to_exhaustion = fuel / mag(e.a)
+                time_to_exhaustion = e.time_til_fuel_exhaustion()
                 prediction = (self.time + time_to_exhaustion, Event.NO_FUEL, e)
                 predictions.add(prediction)
         print(f" T={self.time} adding predictions", predictions)
@@ -109,6 +115,7 @@ class Simulation:
         state_changes = list(filter(lambda sc: sc[0] <= self.time+interval, state_changes))
         now = self.time
         last_start = self.time
+        interval_start = now
         interval_end = now + interval
         while state_changes:
             change_time, reason, entity = state_changes.pop(0)
@@ -128,6 +135,7 @@ class Simulation:
                 if Capability.TANK in entity.capabilities:
                     e_fuel = entity.capabilities[Capability.TANK]["current"]
                     if e_fuel <= 0 or math.isclose(e_fuel, 0, abs_tol=FDV_PREDICTION_ABSOLUTE_TOLERANCE):
+                        # todo: deal with floating point comparison tolerances
                         print(f" prediction true {entity.name} at {e_fuel}fdv")
                         entity.capabilities[Capability.TANK]["current"] = 0
                         new_events.append(
@@ -138,21 +146,33 @@ class Simulation:
                         print(f" prediction false {entity.name} fuel={e_fuel}fdv")
             if isinstance(reason, Command):
                 if reason.cmd == Command.BURN:
-                    print("executing burn")
+                    #print("executing burn")
                     reason: Command = reason
                     entity = reason.actor
                     a = reason.parameters["a"]
                     print(f"t={reason.time} burning {a}")
                     entity.a = a #todo: add acceleration limits
                     new_events.append(Event(now, Event.BURN, entity, reason.parameters))
-                    predictions = self.predict_fuel_exhaustion()
+                    e_fuel = entity.capabilities[Capability.TANK]["current"]
+                    predictions = set()
+                    if e_fuel > 0: predictions = self.predict_fuel_exhaustion()
                     #todo: generalize "stuff changed, add new predictions" logic.
+                    invalidated_scs = []
+                    for sc in self.state_eval:
+                        # invalidate no-fuel predictions that are later than new exhaustion time
+                        if sc[0] > (reason.time + entity.time_til_fuel_exhaustion()) and sc[1] == Event.NO_FUEL and sc[2] == entity:
+                            invalidated_scs.append(sc)
+                    for isc in invalidated_scs:
+                        print(f"invalidating {isc}, popping from interval and state queue")
+                        self.state_eval.remove(isc)
+                        state_changes.remove(isc)
                     self.state_eval.update(predictions)  # OLD FUEL EXHAUSTION PREDICTIONS INVALID!
                     for p in predictions:
                         predicted_time = p[0]
                         if predicted_time < interval_end:
                             # IMPORTANT CAVEAT CREATED by '<' ! for interval x, only events at start <= t < start+x are processed.
                             # add to stack of unprocessed predictions in this interval's responsibility
+                            print(f"adding {p} to interval [{interval_start}, {interval_end})")
                             state_changes.append(p)
                         state_changes = sorted(state_changes, key=lambda s: s[0])
             for e in exhausted_entities:

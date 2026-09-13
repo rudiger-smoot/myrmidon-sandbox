@@ -1,1 +1,2 @@
-test1 25 NAV 0 30000 0
+periclase 25 NAV 0 50 0
+periclase 30 NAV 0 25 0
