@@ -1,6 +1,8 @@
 # usage: dotwar.py universe [orders] time
 # take in dotwar system as text file, run, output event log
 # optionally take in order list from text file
+
+import sys
 from dotclass import *
 
 args = sys.argv

@@ -1,8 +1,9 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
 import math
 
-import numpy
 import numpy as np
-import sys
 
 FDV_PREDICTION_ABSOLUTE_TOLERANCE = 1e-12 #todo: APPROXIMATION
 
@@ -31,7 +32,7 @@ class Entity:
         return time_to_exhaustion
 
 class Command:
-    BURN, SCAN, CAPTURE, FIRE, LOAD, JETTISON, DETONATE = range(7)
+    types = BURN, SCAN, CAPTURE, FIRE, LOAD, JETTISON, DETONATE = range(7)
     names = ['BURN', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'JETTISON', 'DETONATE']
     span = range(7)
     def __init__(self, cmd, time: float, actor: Entity, parameters):
@@ -41,7 +42,7 @@ class Command:
         self.parameters = parameters
 
 class Event:
-    BURN, SCAN, CAPTURE, FIRE, LOAD, UNLOAD, JETTISON, NO_FUEL, DETONATE, SPAWN = range(10)
+    types = BURN, SCAN, CAPTURE, FIRE, LOAD, UNLOAD, JETTISON, NO_FUEL, DETONATE, SPAWN = range(10)
     names = ['BURN', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'UNLOAD', 'JETTISON', 'NO_FUEL', 'DETONATE', 'SPAWN']
     def __init__(self, time, evt, entity, parameters):
         self.time = time
@@ -53,9 +54,23 @@ class Event:
         return f"T={self.time} {self.entity.name} {self.names[self.evt]} {self.parameters}"
 
 class Capability:
-    ENGINE, TANK, BAY, REFINE, DETONATE = range(5)
+    types = ENGINE, TANK, BAY, REFINE, DETONATE = range(5)
     span = range(5)
     names = ['ENGINE', 'TANK', 'BAY', 'REFINE', 'DETONATE']
+
+class Predictor(ABC):
+    @abstractmethod
+    def predictions(self, sim: Simulation, t: float, evt: Event) -> set[Prediction]:
+        pass
+    @abstractmethod
+    def invalidations(self, sim: Simulation, t: float, evt: Event, queue: set[Prediction]) -> set[Prediction]:
+        pass
+
+class Prediction:
+    #todo: add hashing magic functions so no duplicates in Set
+    def __init__(self, time: float, reason: Event | Command):
+        self.time = time
+        self.reason = reason
 
 cap_orders = {Capability.ENGINE: [Command.BURN, Command.SCAN, Command.CAPTURE],
               Capability.TANK:   [Command.LOAD, Command.JETTISON],
@@ -64,12 +79,6 @@ cap_orders = {Capability.ENGINE: [Command.BURN, Command.SCAN, Command.CAPTURE],
 def mag(n: np.array) -> float:
     return np.linalg.norm(n)
 
-def motion(v: np.array, a: np.array, t: float) -> tuple:
-    dr = [v[0] + 0.5*a[0]*t**2,
-          v[1] + 0.5*a[1]*t**2,
-          v[2] + 0.5*a[2]*t**2]
-    dv = [a[0]*t, a[1]*t, a[2]*t]
-    return np.array(dr), np.array(dv)
 
 class Simulation:
     def __init__(self, time, entities: list[Entity], orders: list[Command]):
@@ -81,6 +90,34 @@ class Simulation:
 
         self.state_eval.update(self.predict_fuel_exhaustion())
         print(self.state_eval)
+
+        self.predictors = {} # map from event type to prediction function
+        for event_type in Event.types:
+            self.predictors[event_type] = set()
+
+    def motion(v: np.array, a: np.array, t: float) -> tuple:
+        dr = [v[0] + 0.5 * a[0] * t ** 2,
+              v[1] + 0.5 * a[1] * t ** 2,
+              v[2] + 0.5 * a[2] * t ** 2]
+        dv = [a[0] * t, a[1] * t, a[2] * t]
+        return np.array(dr), np.array(dv)
+
+    def register_predictor(self, event_type: int, p: Predictor) -> bool:
+        if event_type in Event.types:
+            self.predictors[event_type].add(p)
+            return True
+        return False
+
+    def fire_event(self, evt: Event):
+        predictions = set()
+        invalidations = set()
+        for predictor in self.predictors[evt.evt]:
+            predictions.update(predictor.predictions(self, evt.time, evt))
+            invalidations.update(predictor.invalidations(self, evt.time, evt, self.state_eval))
+        for invalid_prediction in self.state_eval:
+            self.state_eval.remove(invalid_prediction)
+        self.state_eval.update(predictions)
+        return predictions, invalidations
 
     def predict_fuel_exhaustion(self):
         fuel_users = self.entities_with_capability([Capability.ENGINE, Capability.TANK])
