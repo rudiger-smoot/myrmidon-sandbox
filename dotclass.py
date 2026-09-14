@@ -95,7 +95,7 @@ class Simulation:
         for event_type in Event.types:
             self.predictors[event_type] = set()
 
-    def motion(v: np.array, a: np.array, t: float) -> tuple:
+    def motion(self, v: np.array, a: np.array, t: float) -> tuple:
         dr = [v[0] + 0.5 * a[0] * t ** 2,
               v[1] + 0.5 * a[1] * t ** 2,
               v[2] + 0.5 * a[2] * t ** 2]
@@ -160,7 +160,7 @@ class Simulation:
             self.time = now
             exhausted_entities = set()
             for e in self.entities:
-                dr, dv = motion(e.v, e.a, now - last_start)
+                dr, dv = self.motion(e.v, e.a, now - last_start)
                 e.r = e.r + dr
                 e.v = e.v + dv
                 fuel_usage = mag(dv)
