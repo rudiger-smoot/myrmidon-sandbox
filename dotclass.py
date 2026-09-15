@@ -31,6 +31,7 @@ class Entity:
         else: time_to_exhaustion = None
         return time_to_exhaustion
 
+
 class Command:
     types = BURN, SCAN, CAPTURE, FIRE, LOAD, JETTISON, DETONATE = range(7)
     names = ['BURN', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'JETTISON', 'DETONATE']
@@ -42,16 +43,16 @@ class Command:
         self.parameters = parameters
 
 class Event:
-    types = BURN, SCAN, CAPTURE, FIRE, LOAD, UNLOAD, JETTISON, NO_FUEL, DETONATE, SPAWN = range(10)
-    names = ['BURN', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'UNLOAD', 'JETTISON', 'NO_FUEL', 'DETONATE', 'SPAWN']
-    def __init__(self, time, evt, entity, parameters):
+    types = BURN, SCAN, CAPTURE, FIRE, LOAD, UNLOAD, JETTISON, NO_FUEL, DETONATE, SPAWN, HEARTBEAT = range(11)
+    names = ['BURN', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'UNLOAD', 'JETTISON', 'NO_FUEL', 'DETONATE', 'SPAWN', 'HEARTBEAT']
+    def __init__(self, time, evt, actor, parameters):
         self.time = time
         self.evt = evt
-        self.entity = entity
+        self.actor = actor
         self.parameters = parameters
 
     def __str__(self):
-        return f"T={self.time} {self.entity.name} {self.names[self.evt]} {self.parameters}"
+        return f"!!evt {self.time} {self.actor} {self.names[self.evt]}!!"
 
 class Capability:
     types = ENGINE, TANK, BAY, REFINE, DETONATE = range(5)
@@ -60,17 +61,11 @@ class Capability:
 
 class Predictor(ABC):
     @abstractmethod
-    def predictions(self, sim: Simulation, t: float, evt: Event) -> set[Prediction]:
+    def predictions(self, sim: Simulation, t: float, evt: Event) -> set[tuple]:
         pass
     @abstractmethod
-    def invalidations(self, sim: Simulation, t: float, evt: Event, queue: set[Prediction]) -> set[Prediction]:
+    def invalidations(self, sim: Simulation, t: float, evt: Event, queue: set[tuple]) -> set[tuple]:
         pass
-
-class Prediction:
-    #todo: add hashing magic functions so no duplicates in Set
-    def __init__(self, time: float, reason: Event | Command):
-        self.time = time
-        self.reason = reason
 
 cap_orders = {Capability.ENGINE: [Command.BURN, Command.SCAN, Command.CAPTURE],
               Capability.TANK:   [Command.LOAD, Command.JETTISON],
@@ -85,7 +80,8 @@ class Simulation:
         self.time = time
         self.entities = entities
         self.orders = orders
-        self.state_eval = {(0, -1, None)}
+        # predictions in state_eval are tuples of (time, reason), with reason an Event or Command
+        self.state_eval = {(0, Event(0, Event.HEARTBEAT, None, {}))}
         self.events = []
 
         self.state_eval.update(self.predict_fuel_exhaustion())
@@ -108,7 +104,7 @@ class Simulation:
             return True
         return False
 
-    def fire_event(self, evt: Event):
+    def update_predictions(self, evt: Event):
         predictions = set()
         invalidations = set()
         for predictor in self.predictors[evt.evt]:
@@ -125,7 +121,8 @@ class Simulation:
         for e in fuel_users:
             if mag(e.a) > 0:
                 time_to_exhaustion = e.time_til_fuel_exhaustion()
-                prediction = (self.time + time_to_exhaustion, Event.NO_FUEL, e)
+                absolute_time = self.time +time_to_exhaustion
+                prediction = (absolute_time, Event(absolute_time, Event.NO_FUEL, e, {}))
                 predictions.add(prediction)
         print(f" T={self.time} adding predictions", predictions)
         return predictions
@@ -138,7 +135,8 @@ class Simulation:
         return es
 
     def run(self, interval = 0):
-        state_changes = {(self.time, -1, None), (self.time+interval, -1, None)}
+        state_changes = {(self.time, Event(self.time, Event.HEARTBEAT, None, {})),
+        (self.time+interval, Event(self.time+interval, Event.HEARTBEAT, None, {}))}
         state_changes.update(self.state_eval)
         orders = []
         for e in self.entities:
@@ -146,7 +144,7 @@ class Simulation:
                 o: Command = o
                 if self.time <= o.time <= (self.time + interval):
                     orders.append(o)
-                    state_changes.add((o.time, o, e))
+                    state_changes.add((o.time, o))
         state_changes = sorted(state_changes, key= lambda s: s[0])
         new_events = []
         state_changes = list(filter(lambda sc: sc[0] <= self.time+interval, state_changes))
@@ -155,7 +153,8 @@ class Simulation:
         interval_start = now
         interval_end = now + interval
         while state_changes:
-            change_time, reason, entity = state_changes.pop(0)
+            change_time, reason = state_changes.pop(0)
+            actor = reason.actor
             now = change_time
             self.time = now
             exhausted_entities = set()
@@ -167,37 +166,40 @@ class Simulation:
                 e.capabilities[Capability.TANK]["current"] -= fuel_usage
                 print(f"t={now} {e.name} used {fuel_usage}fdv of fuel now at {e.capabilities[Capability.TANK]["current"]}fdv")
                 print(f"t={now} {e.name} dr={mag(dr)}m dv={mag(dv)}m/s current v={mag(e.v)}m/s")
-            if reason == Event.NO_FUEL:
-                print(f"t={now} processing prediction: {entity.name} fuel exhaustion")
-                if Capability.TANK in entity.capabilities:
-                    e_fuel = entity.capabilities[Capability.TANK]["current"]
-                    if e_fuel <= 0 or math.isclose(e_fuel, 0, abs_tol=FDV_PREDICTION_ABSOLUTE_TOLERANCE):
-                        # todo: deal with floating point comparison tolerances
-                        print(f" prediction true {entity.name} at {e_fuel}fdv")
-                        entity.capabilities[Capability.TANK]["current"] = 0
-                        new_events.append(
-                            Event(now, Event.NO_FUEL, entity, {})
-                        )
-                        exhausted_entities.add(entity)
-                    else:
-                        print(f" prediction false {entity.name} fuel={e_fuel}fdv")
-            if isinstance(reason, Command):
+            if isinstance(reason, Event):
+                if reason.evt == Event.NO_FUEL:
+                    if not actor.name:
+                        pass
+                    print(f"t={now} processing prediction: {actor.name} fuel exhaustion")
+                    if Capability.TANK in actor.capabilities:
+                        e_fuel = actor.capabilities[Capability.TANK]["current"]
+                        if e_fuel <= 0 or math.isclose(e_fuel, 0, abs_tol=FDV_PREDICTION_ABSOLUTE_TOLERANCE):
+                            # todo: deal with floating point comparison tolerances
+                            print(f" prediction true {actor.name} at {e_fuel}fdv")
+                            actor.capabilities[Capability.TANK]["current"] = 0
+                            new_events.append(
+                                Event(now, Event.NO_FUEL, actor, {})
+                            )
+                            exhausted_entities.add(actor)
+                        else:
+                            print(f" prediction false {actor.name} fuel={e_fuel}fdv")
+            elif isinstance(reason, Command):
                 if reason.cmd == Command.BURN:
                     #print("executing burn")
                     reason: Command = reason
-                    entity = reason.actor
                     a = reason.parameters["a"]
                     print(f"t={reason.time} burning {a}")
-                    entity.a = a #todo: add acceleration limits
-                    new_events.append(Event(now, Event.BURN, entity, reason.parameters))
-                    e_fuel = entity.capabilities[Capability.TANK]["current"]
+                    actor.a = a #todo: add acceleration limits
+                    new_events.append(Event(now, Event.BURN, actor, reason.parameters))
+                    e_fuel = actor.capabilities[Capability.TANK]["current"]
                     predictions = set()
                     if e_fuel > 0: predictions = self.predict_fuel_exhaustion()
                     #todo: generalize "stuff changed, add new predictions" logic.
                     invalidated_scs = []
                     for sc in self.state_eval:
                         # invalidate no-fuel predictions that are later than new exhaustion time
-                        if sc[0] > (reason.time + entity.time_til_fuel_exhaustion()) and sc[1] == Event.NO_FUEL and sc[2] == entity:
+                        if sc[0] > (reason.time + actor.time_til_fuel_exhaustion()) and isinstance(sc[1], Event) and \
+                                sc[1].evt == Event.NO_FUEL and sc[1].actor == actor:
                             invalidated_scs.append(sc)
                     for isc in invalidated_scs:
                         print(f"invalidating {isc}, popping from interval and state queue")

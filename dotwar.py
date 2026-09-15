@@ -66,7 +66,7 @@ if orders:
                 ctime = float(consttokens[1])
                 ctype = consttokens[2]
                 argtokens  = tokens[3:]
-                if ctype == "NAV":
+                if ctype == "BURN":
                     ctype = Command.BURN
                     cargs["a"] = np.array([float(a) for a in argtokens[0:4]])
                 else:
