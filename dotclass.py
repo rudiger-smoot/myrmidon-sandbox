@@ -49,7 +49,12 @@ class Event:
         self.time = time
         self.evt = evt
         self.actor = actor
-        self.parameters = parameters
+        self.parameters: dict = parameters
+
+    def __hash__(self):
+        paramset = tuple(self.parameters.keys())
+        valset = tuple(self.parameters.values())
+        return hash((self.time, self.evt, self.actor, hash(paramset), hash(valset)))
 
     def __str__(self):
         return f"!!evt {self.time} {self.actor} {self.names[self.evt]}!!"
@@ -74,8 +79,17 @@ cap_orders = {Capability.ENGINE: [Command.BURN, Command.SCAN, Command.CAPTURE],
 def mag(n: np.array) -> float:
     return np.linalg.norm(n)
 
+"""class BurnObserver(Predictor):
+    def predictions(self, sim: Simulation, t: float, evt: Event) -> set[tuple]:
+        entity = evt.actor
+        
+        acc = evt.parameters["a"]
+        """
 
 class Simulation:
+    predictors = {}  # map from event type to prediction function
+    for event_type in Event.types:
+        predictors[event_type] = set()
     def __init__(self, time, entities: list[Entity], orders: list[Command]):
         self.time = time
         self.entities = entities
@@ -86,10 +100,6 @@ class Simulation:
 
         self.state_eval.update(self.predict_fuel_exhaustion())
         print(self.state_eval)
-
-        self.predictors = {} # map from event type to prediction function
-        for event_type in Event.types:
-            self.predictors[event_type] = set()
 
     def motion(self, v: np.array, a: np.array, t: float) -> tuple:
         dr = [v[0] + 0.5 * a[0] * t ** 2,
@@ -107,11 +117,11 @@ class Simulation:
     def update_predictions(self, evt: Event):
         predictions = set()
         invalidations = set()
+        queue = set(filter(lambda sc: sc[0] >= evt.time, self.state_eval))
         for predictor in self.predictors[evt.evt]:
             predictions.update(predictor.predictions(self, evt.time, evt))
-            invalidations.update(predictor.invalidations(self, evt.time, evt, self.state_eval))
-        for invalid_prediction in self.state_eval:
-            self.state_eval.remove(invalid_prediction)
+            invalidations.update(predictor.invalidations(self, evt.time, evt, queue))
+        self.state_eval = self.state_eval.difference(invalidations)
         self.state_eval.update(predictions)
         return predictions, invalidations
 
@@ -190,6 +200,7 @@ class Simulation:
                     a = reason.parameters["a"]
                     print(f"t={reason.time} burning {a}")
                     actor.a = a #todo: add acceleration limits
+                    self.update_predictions(Event(now, Event.BURN, actor, reason.parameters))
                     new_events.append(Event(now, Event.BURN, actor, reason.parameters))
                     e_fuel = actor.capabilities[Capability.TANK]["current"]
                     predictions = set()
