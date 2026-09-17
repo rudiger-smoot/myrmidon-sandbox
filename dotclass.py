@@ -88,6 +88,7 @@ class PredictNofuelFromBurn(Predictor):
             nofuel_time = t + entity.time_til_fuel_exhaustion()
             nofuel_prediction = (nofuel_time, Event(nofuel_time, Event.NO_FUEL, entity, {}))
             predictions.add(nofuel_prediction)
+            print(f" predicting from {t}s: {nofuel_prediction}")
         return predictions
 
     def invalidations(self, sim: Simulation, t: float, evt: Event, queue: set[tuple]) -> set[tuple]:
@@ -102,8 +103,10 @@ class PredictNofuelFromBurn(Predictor):
 
 class Simulation:
     predictors = {}  # map from event type to prediction function
+    predictors[Event.BURN] = {PredictNofuelFromBurn()}
     for event_type in Event.types:
-        predictors[event_type] = set()
+        if not event_type in predictors.keys():
+            predictors[event_type] = set()
     def __init__(self, time, entities: list[Entity], orders: list[Command]):
         self.time = time
         self.entities = entities
@@ -133,7 +136,7 @@ class Simulation:
         invalidations = set()
         queue = set(filter(lambda sc: sc[0] >= evt.time, self.state_eval))
         for predictor in self.predictors[evt.evt]:
-            predictions.update(predictor.predictions(self, evt.time, evt))
+            predictions.update(predictor.predictions(None, evt.time, evt))
             invalidations.update(predictor.invalidations(self, evt.time, evt, queue))
         self.state_eval = self.state_eval.difference(invalidations)
         self.state_eval.update(predictions)
@@ -182,6 +185,7 @@ class Simulation:
             now = change_time
             self.time = now
             exhausted_entities = set()
+            new_predictions, invalidations = set(), set()
             for e in self.entities:
                 dr, dv = self.motion(e.v, e.a, now - last_start)
                 e.r = e.r + dr
@@ -189,7 +193,7 @@ class Simulation:
                 fuel_usage = mag(dv)
                 e.capabilities[Capability.TANK]["current"] -= fuel_usage
                 print(f"t={now} {e.name} used {fuel_usage}fdv of fuel now at {e.capabilities[Capability.TANK]["current"]}fdv")
-                print(f"t={now} {e.name} dr={mag(dr)}m dv={mag(dv)}m/s current v={mag(e.v)}m/s")
+                print(f"t={now} {e.name} a={mag(e.a)} dr={mag(dr)}m dv={mag(dv)}m/s current v={mag(e.v)}m/s")
             if isinstance(reason, Event):
                 if reason.evt == Event.NO_FUEL:
                     if not actor.name:
@@ -204,7 +208,7 @@ class Simulation:
                             new_events.append(
                                 Event(now, Event.NO_FUEL, actor, {})
                             )
-                            exhausted_entities.add(actor)
+                            actor.a = np.array((0, 0, 0))
                         else:
                             print(f" prediction false {actor.name} fuel={e_fuel}fdv")
             elif isinstance(reason, Command):
@@ -213,35 +217,24 @@ class Simulation:
                     reason: Command = reason
                     a = reason.parameters["a"]
                     print(f"t={reason.time} burning {a}")
-                    actor.a = a #todo: add acceleration limits
-                    self.update_predictions(Event(now, Event.BURN, actor, reason.parameters))
-                    new_events.append(Event(now, Event.BURN, actor, reason.parameters))
                     e_fuel = actor.capabilities[Capability.TANK]["current"]
-                    predictions = set()
-                    if e_fuel > 0: predictions = self.predict_fuel_exhaustion()
-                    #todo: generalize "stuff changed, add new predictions" logic.
-                    invalidated_scs = []
-                    for sc in self.state_eval:
-                        # invalidate no-fuel predictions that are later than new exhaustion time
-                        if sc[0] > (reason.time + actor.time_til_fuel_exhaustion()) and isinstance(sc[1], Event) and \
-                                sc[1].evt == Event.NO_FUEL and sc[1].actor == actor:
-                            invalidated_scs.append(sc)
-                    for isc in invalidated_scs:
-                        print(f"invalidating {isc}, popping from interval and state queue")
-                        self.state_eval.remove(isc)
-                        state_changes.remove(isc)
-                    self.state_eval.update(predictions)  # OLD FUEL EXHAUSTION PREDICTIONS INVALID!
-                    for p in predictions:
-                        predicted_time = p[0]
-                        if predicted_time < interval_end:
-                            # IMPORTANT CAVEAT CREATED by '<' ! for interval x, only events at start <= t < start+x are processed.
-                            # add to stack of unprocessed predictions in this interval's responsibility
-                            print(f"adding {p} to interval [{interval_start}, {interval_end})")
-                            state_changes.append(p)
-                        state_changes = sorted(state_changes, key=lambda s: s[0])
-            for e in exhausted_entities:
-                # Exhaust acceleration after other orders processed so can't burn at same instant as you run out of fuel
-                e.a = np.array((0, 0, 0))
+                    if e_fuel:
+                        actor.a = a #todo: add acceleration limits
+                    else:
+                        actor.a = np.array((0, 0, 0))
+                    new_events.append(Event(now, Event.BURN, actor, reason.parameters))
+                    new_predictions, invalidations = self.update_predictions(Event(now, Event.BURN, actor, reason.parameters))
+            # update state changes queue for this interval based on processed prediction's consequences
+            for isc in invalidations:
+                state_changes.remove(isc)
+            for p in new_predictions:
+                predicted_time = p[0]
+                if predicted_time < interval_end:
+                    # IMPORTANT CAVEAT CREATED by '<' ! for interval x, only events at start <= t < start+x are processed.
+                    # add to stack of unprocessed predictions in this interval's responsibility
+                    print(f"adding {p} to interval [{interval_start}, {interval_end})")
+                    state_changes.append(p)
+                state_changes = sorted(state_changes, key=lambda s: s[0])
             last_start = now
         self.events += new_events
         self.time = now
