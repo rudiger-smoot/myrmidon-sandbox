@@ -79,12 +79,26 @@ cap_orders = {Capability.ENGINE: [Command.BURN, Command.SCAN, Command.CAPTURE],
 def mag(n: np.array) -> float:
     return np.linalg.norm(n)
 
-"""class BurnObserver(Predictor):
+class PredictNofuelFromBurn(Predictor):
     def predictions(self, sim: Simulation, t: float, evt: Event) -> set[tuple]:
-        entity = evt.actor
-        
-        acc = evt.parameters["a"]
-        """
+        predictions = set()
+        entity: Entity = evt.actor
+        e_fuel = entity.capabilities[Capability.TANK]["current"]
+        if e_fuel > 0 and mag(entity.a) > 0: # if entity has fuel and is burning it
+            nofuel_time = t + entity.time_til_fuel_exhaustion()
+            nofuel_prediction = (nofuel_time, Event(nofuel_time, Event.NO_FUEL, entity, {}))
+            predictions.add(nofuel_prediction)
+        return predictions
+
+    def invalidations(self, sim: Simulation, t: float, evt: Event, queue: set[tuple]) -> set[tuple]:
+        invalidations = set()
+        for prediction in queue:
+            if isinstance(prediction[1], Event):
+                # invalidate no-fuel predictions
+                if prediction[1].actor == evt.actor and prediction[1].evt == Event.NO_FUEL:
+                    invalidations.add(prediction)
+        return invalidations
+
 
 class Simulation:
     predictors = {}  # map from event type to prediction function
@@ -183,7 +197,7 @@ class Simulation:
                     print(f"t={now} processing prediction: {actor.name} fuel exhaustion")
                     if Capability.TANK in actor.capabilities:
                         e_fuel = actor.capabilities[Capability.TANK]["current"]
-                        if e_fuel <= 0 or math.isclose(e_fuel, 0, abs_tol=FDV_PREDICTION_ABSOLUTE_TOLERANCE):
+                        if math.isclose(e_fuel, 0, abs_tol=FDV_PREDICTION_ABSOLUTE_TOLERANCE):
                             # todo: deal with floating point comparison tolerances
                             print(f" prediction true {actor.name} at {e_fuel}fdv")
                             actor.capabilities[Capability.TANK]["current"] = 0
