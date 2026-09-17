@@ -119,11 +119,12 @@ class Simulation:
         print(self.state_eval)
 
     def motion(self, v: np.array, a: np.array, t: float) -> tuple:
-        dr = [v[0] + 0.5 * a[0] * t ** 2,
-              v[1] + 0.5 * a[1] * t ** 2,
-              v[2] + 0.5 * a[2] * t ** 2]
+        dr = [v[0] + 0.5 * a[0] * (t ** 2),
+              v[1] + 0.5 * a[1] * (t ** 2),
+              v[2] + 0.5 * a[2] * (t ** 2)]
         dv = [a[0] * t, a[1] * t, a[2] * t]
-        return np.array(dr), np.array(dv)
+        npr, npv = np.array(dr), np.array(dv)
+        return npr, npv
 
     def register_predictor(self, event_type: int, p: Predictor) -> bool:
         if event_type in Event.types:

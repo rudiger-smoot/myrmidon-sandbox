@@ -82,4 +82,5 @@ if orders:
 sim = Simulation(0, entities, [])
 sim.run(endtime)
 print("total events", list(str(e) for e in sim.events))
+print(tuple(e.r for e in sim.entities))
 print(sim.predict_fuel_exhaustion())
