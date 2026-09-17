@@ -1,6 +1,8 @@
 # usage: dotwar.py universe [orders] time
 # take in dotwar system as text file, run, output event log
 # optionally take in order list from text file
+
+import sys
 from dotclass import *
 
 args = sys.argv
@@ -64,7 +66,7 @@ if orders:
                 ctime = float(consttokens[1])
                 ctype = consttokens[2]
                 argtokens  = tokens[3:]
-                if ctype == "NAV":
+                if ctype == "BURN":
                     ctype = Command.BURN
                     cargs["a"] = np.array([float(a) for a in argtokens[0:4]])
                 else:
@@ -80,4 +82,5 @@ if orders:
 sim = Simulation(0, entities, [])
 sim.run(endtime)
 print("total events", list(str(e) for e in sim.events))
+print(tuple(e.r for e in sim.entities))
 print(sim.predict_fuel_exhaustion())
