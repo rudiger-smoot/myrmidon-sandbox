@@ -123,8 +123,7 @@ class Simulation:
               (v[1] * t) + 0.5 * a[1] * (t ** 2),
               (v[2] * t) + 0.5 * a[2] * (t ** 2)]
         dv = [a[0] * t, a[1] * t, a[2] * t]
-        npr, npv = np.array(dr), np.array(dv)
-        return npr, npv
+        return np.array(dr), np.array(dv)
 
     def register_predictor(self, event_type: int, p: Predictor) -> bool:
         if event_type in Event.types:
@@ -136,7 +135,6 @@ class Simulation:
         predictions = set()
         invalidations = set()
         queue = set(filter(lambda sc: sc[0] >= evt.time, self.state_eval))
-        #queue = self.state_eval
         for predictor in self.predictors[evt.evt]:
             predictions.update(predictor.predictions(None, evt.time, evt))
             invalidations.update(predictor.invalidations(self, evt.time, evt, queue))
@@ -230,7 +228,7 @@ class Simulation:
                 try:
                     state_changes.remove(isc)
                 except:
-                    print("NOT IN LIST", state_changes, isc)
+                    pass
             for p in new_predictions:
                 predicted_time = p[0]
                 if predicted_time < interval_end:
