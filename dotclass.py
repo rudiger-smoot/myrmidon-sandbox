@@ -191,7 +191,6 @@ class Simulation:
                 e.r = e.r + dr
                 e.v = e.v + dv
                 fuel_usage = mag(dv)
-                print("VEL", e.v)
                 e.capabilities[Capability.TANK]["current"] -= fuel_usage
                 print(f"t={now} {e.name} used {fuel_usage}fdv of fuel now at {e.capabilities[Capability.TANK]["current"]}fdv")
                 print(f"t={now} {e.name} a={mag(e.a)} dr={mag(dr)}m dv={mag(dv)}m/s current v={mag(e.v)}m/s")
