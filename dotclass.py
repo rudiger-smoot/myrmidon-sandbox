@@ -119,9 +119,9 @@ class Simulation:
         print(self.state_eval)
 
     def motion(self, v: np.array, a: np.array, t: float) -> tuple:
-        dr = [v[0] + 0.5 * a[0] * (t ** 2),
-              v[1] + 0.5 * a[1] * (t ** 2),
-              v[2] + 0.5 * a[2] * (t ** 2)]
+        dr = [(v[0] * t) + 0.5 * a[0] * (t ** 2),
+              (v[1] * t) + 0.5 * a[1] * (t ** 2),
+              (v[2] * t) + 0.5 * a[2] * (t ** 2)]
         dv = [a[0] * t, a[1] * t, a[2] * t]
         npr, npv = np.array(dr), np.array(dv)
         return npr, npv
@@ -136,6 +136,7 @@ class Simulation:
         predictions = set()
         invalidations = set()
         queue = set(filter(lambda sc: sc[0] >= evt.time, self.state_eval))
+        #queue = self.state_eval
         for predictor in self.predictors[evt.evt]:
             predictions.update(predictor.predictions(None, evt.time, evt))
             invalidations.update(predictor.invalidations(self, evt.time, evt, queue))
@@ -192,13 +193,12 @@ class Simulation:
                 e.r = e.r + dr
                 e.v = e.v + dv
                 fuel_usage = mag(dv)
+                print("VEL", e.v)
                 e.capabilities[Capability.TANK]["current"] -= fuel_usage
                 print(f"t={now} {e.name} used {fuel_usage}fdv of fuel now at {e.capabilities[Capability.TANK]["current"]}fdv")
                 print(f"t={now} {e.name} a={mag(e.a)} dr={mag(dr)}m dv={mag(dv)}m/s current v={mag(e.v)}m/s")
             if isinstance(reason, Event):
                 if reason.evt == Event.NO_FUEL:
-                    if not actor.name:
-                        pass
                     print(f"t={now} processing prediction: {actor.name} fuel exhaustion")
                     if Capability.TANK in actor.capabilities:
                         e_fuel = actor.capabilities[Capability.TANK]["current"]
@@ -227,7 +227,10 @@ class Simulation:
                     new_predictions, invalidations = self.update_predictions(Event(now, Event.BURN, actor, reason.parameters))
             # update state changes queue for this interval based on processed prediction's consequences
             for isc in invalidations:
-                state_changes.remove(isc)
+                try:
+                    state_changes.remove(isc)
+                except:
+                    print("NOT IN LIST", state_changes, isc)
             for p in new_predictions:
                 predicted_time = p[0]
                 if predicted_time < interval_end:
