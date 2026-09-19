@@ -118,11 +118,11 @@ class Simulation:
         self.state_eval.update(self.predict_fuel_exhaustion())
         print(self.state_eval)
 
-    def motion(self, v: np.array, a: np.array, t: float) -> tuple:
-        dr = [(v[0] * t) + 0.5 * a[0] * (t ** 2),
-              (v[1] * t) + 0.5 * a[1] * (t ** 2),
-              (v[2] * t) + 0.5 * a[2] * (t ** 2)]
-        dv = [a[0] * t, a[1] * t, a[2] * t]
+    def motion(self, v: np.array, a: np.array, dt: float) -> tuple:
+        dr = [(v[0] * dt) + 0.5 * a[0] * (dt ** 2),
+              (v[1] * dt) + 0.5 * a[1] * (dt ** 2),
+              (v[2] * dt) + 0.5 * a[2] * (dt ** 2)]
+        dv = [a[0] * dt, a[1] * dt, a[2] * dt]
         return np.array(dr), np.array(dv)
 
     def register_predictor(self, event_type: int, p: Predictor) -> bool:
