@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import math
+from wsgiref.util import request_uri
 
 import numpy as np
 
@@ -50,6 +51,9 @@ class Event:
         self.evt = evt
         self.actor = actor
         self.parameters: dict = parameters
+
+        self.ok = True
+        self.result = {}
 
     def __hash__(self):
         paramset = tuple(self.parameters.keys())
@@ -100,6 +104,10 @@ class PredictNofuelFromBurn(Predictor):
                     invalidations.add(prediction)
         return invalidations
 
+class Rules:
+    INTERACTION_RANGE_LIMIT = 1000 # meters
+    INTERACTION_SPEED_LIMIT = 100 # m/s
+    PLACEHOLDER_SCAN_RANGE = 150000 # meters
 
 class Simulation:
     predictors = {}  # map from event type to prediction function
@@ -107,6 +115,7 @@ class Simulation:
     for event_type in Event.types:
         if not event_type in predictors.keys():
             predictors[event_type] = set()
+    rules = Rules
     def __init__(self, time, entities: list[Entity], orders: list[Command]):
         self.time = time
         self.entities = entities
@@ -153,6 +162,13 @@ class Simulation:
                 predictions.add(prediction)
         print(f" T={self.time} adding predictions", predictions)
         return predictions
+
+    def entity_by_name(self, name: str) -> Entity:
+        e = None
+        for e in self.entities:
+            if e.name == name:
+                return e
+        return e
 
     def entities_with_capability(self, capabilities):
         es = set()
@@ -222,6 +238,48 @@ class Simulation:
                         actor.a = np.array((0, 0, 0))
                     new_events.append(Event(now, Event.BURN, actor, reason.parameters))
                     new_predictions, invalidations = self.update_predictions(Event(now, Event.BURN, actor, reason.parameters))
+                elif reason.cmd == Command.LOAD:
+                    print("executing load")
+                    event_out = Event(reason.time, Command.LOAD, reason.actor, reason.parameters)
+                    target_candidates = tuple(filter(lambda e: mag(actor.r - e.r) <= self.rules.PLACEHOLDER_SCAN_RANGE, self.entities))
+                    target = None
+                    for tc in target_candidates:
+                        if tc.name == reason.parameters["target"]:
+                            target = tc
+                    if target is None:
+                        event_out.ok = False
+                        event_out.result = {'msg':f'no visible entity named {reason.parameters["target"]}'}
+                    else:
+                        distance = mag(actor.r - target.r)
+                        vel_diff = mag(actor.v - target.v)
+                        print(actor.r, actor.v, distance)
+                        ok = True
+                        if distance > self.rules.INTERACTION_RANGE_LIMIT:
+                            event_out.ok = ok = False
+                            event_out.result = {'msg': f'target is greater than {self.rules.INTERACTION_RANGE_LIMIT}m away'}
+                        if vel_diff > self.rules.INTERACTION_SPEED_LIMIT:
+                            event_out.ok = ok = False
+                            event_out.result = {'msg': f'you are {vel_diff}m/s faster than target, must be within {self.rules.INTERACTION_SPEED_LIMIT}m/s'}
+                        if not (Capability.TANK in target.capabilities and
+                                (Capability.REFINE in target.capabilities or Capability.REFINE in target.capabilities)):
+                            event_out.ok = ok = False
+                            event_out.result = {
+                                'msg': f'target must be planet or fuel cache'}
+                        if ok:
+                            event_out.result = {'fuel_added': 0, 'missiles_added': 0}
+                            # load fuel and missiles
+                            e_tank = actor.capabilities[Capability.TANK]
+                            t_caps = target.capabilities
+                            if e_tank["current"] < e_tank["max"]:
+                                missing_fuel = e_tank["max"] - e_tank["current"]
+                                if Capability.REFINE in t_caps: # planet
+                                    withdraw_fuel = min(missing_fuel, t_caps[Capability.TANK]["current"])
+                                    t_caps[Capability.TANK]["current"] -= withdraw_fuel
+                                    e_tank["current"] += withdraw_fuel
+                                    print(f"refueled {actor.name} from {target.name} for {withdraw_fuel}fdv")
+                                    event_out.ok = True
+                                    event_out.result['fuel_added'] = withdraw_fuel
+                    print(event_out.ok, event_out.result)
             # update state changes queue for this interval based on processed prediction's consequences
             for isc in invalidations:
                 try:

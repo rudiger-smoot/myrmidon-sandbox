@@ -1,2 +1,4 @@
-# name kind r r r v v v a a a allegiance [capabilities ...]
+# name kind   r r r v v v a a a allegiance [capabilities ...]
 limonite ship 0 0 0 0 0 0 0 0 0 defenders engine tank 100 100
+earth planet  0 0 0 0 0 0 0 0 0 defenders refine tank 100 100
+stash cache   0 0 0 0 0 0 0 0 0 attackers supply tank 100 100

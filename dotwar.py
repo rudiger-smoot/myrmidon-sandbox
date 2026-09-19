@@ -69,6 +69,9 @@ if orders:
                 if ctype == "BURN":
                     ctype = Command.BURN
                     cargs["a"] = np.array([float(a) for a in argtokens[0:4]])
+                elif ctype == "LOAD":
+                    ctype = Command.LOAD
+                    cargs["target"] = argtokens[0]
                 else:
                     raise Exception(f"unknown command {ctype}")
                 actor = tuple(filter(lambda e: e.name == cvessel, entities))
