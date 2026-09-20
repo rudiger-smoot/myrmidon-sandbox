@@ -64,9 +64,9 @@ class Event:
         return f"!!evt {self.time} {self.actor} {self.names[self.evt]}!!"
 
 class Capability:
-    types = ENGINE, TANK, BAY, REFINE, DETONATE = range(5)
-    span = range(5)
-    names = ['ENGINE', 'TANK', 'BAY', 'REFINE', 'DETONATE']
+    types = ENGINE, TANK, BAY, REFINE, SUPPLY, DETONATE = range(6)
+    span = range(6)
+    names = ['ENGINE', 'TANK', 'BAY', 'REFINE', 'SUPPLY', 'DETONATE']
 
 class Predictor(ABC):
     @abstractmethod
@@ -83,7 +83,7 @@ cap_orders = {Capability.ENGINE: [Command.BURN, Command.SCAN, Command.CAPTURE],
 def mag(n: np.array) -> float:
     return np.linalg.norm(n)
 
-class PredictNofuelFromBurn(Predictor):
+class PredictNofuel(Predictor):
     def predictions(self, sim: Simulation, t: float, evt: Event) -> set[tuple]:
         predictions = set()
         entity: Entity = evt.actor
@@ -111,7 +111,8 @@ class Rules:
 
 class Simulation:
     predictors = {}  # map from event type to prediction function
-    predictors[Event.BURN] = {PredictNofuelFromBurn()}
+    predictors[Event.BURN] = {PredictNofuel()}
+    predictors[Event.LOAD] = {PredictNofuel()}
     for event_type in Event.types:
         if not event_type in predictors.keys():
             predictors[event_type] = set()
@@ -140,7 +141,11 @@ class Simulation:
             return True
         return False
 
-    def update_predictions(self, evt: Event):
+    def realize_event(self, evt: Event):
+        self.events.append(evt)
+        return self.updated_predictions(evt)
+
+    def updated_predictions(self, evt: Event):
         predictions = set()
         invalidations = set()
         queue = set(filter(lambda sc: sc[0] >= evt.time, self.state_eval))
@@ -200,7 +205,7 @@ class Simulation:
             actor = reason.actor
             now = change_time
             self.time = now
-            exhausted_entities = set()
+            destroyed_entities = set()
             new_predictions, invalidations = set(), set()
             for e in self.entities:
                 dr, dv = self.motion(e.v, e.a, now - last_start)
@@ -237,10 +242,10 @@ class Simulation:
                     else:
                         actor.a = np.array((0, 0, 0))
                     new_events.append(Event(now, Event.BURN, actor, reason.parameters))
-                    new_predictions, invalidations = self.update_predictions(Event(now, Event.BURN, actor, reason.parameters))
+                    new_predictions, invalidations = self.updated_predictions(Event(now, Event.BURN, actor, reason.parameters))
                 elif reason.cmd == Command.LOAD:
                     print("executing load")
-                    event_out = Event(reason.time, Command.LOAD, reason.actor, reason.parameters)
+                    event_out = Event(reason.time, Event.LOAD, reason.actor, reason.parameters)
                     target_candidates = tuple(filter(lambda e: mag(actor.r - e.r) <= self.rules.PLACEHOLDER_SCAN_RANGE, self.entities))
                     target = None
                     for tc in target_candidates:
@@ -265,6 +270,10 @@ class Simulation:
                             event_out.ok = ok = False
                             event_out.result = {
                                 'msg': f'target must be planet or fuel cache'}
+                        if Capability.REFINE in target.capabilities and target.allegiance != actor.allegiance:
+                            event_out.ok = ok = False
+                            event_out.result = {
+                                'msg': f"can't reload from non-allied planet"}
                         if ok:
                             event_out.result = {'fuel_added': 0, 'missiles_added': 0}
                             # load fuel and missiles
@@ -272,13 +281,25 @@ class Simulation:
                             t_caps = target.capabilities
                             if e_tank["current"] < e_tank["max"]:
                                 missing_fuel = e_tank["max"] - e_tank["current"]
-                                if Capability.REFINE in t_caps: # planet
-                                    withdraw_fuel = min(missing_fuel, t_caps[Capability.TANK]["current"])
-                                    t_caps[Capability.TANK]["current"] -= withdraw_fuel
-                                    e_tank["current"] += withdraw_fuel
-                                    print(f"refueled {actor.name} from {target.name} for {withdraw_fuel}fdv")
+                                withdraw_fuel = min(missing_fuel, t_caps[Capability.TANK]["current"])
+                                t_caps[Capability.TANK]["current"] -= withdraw_fuel
+                                e_tank["current"] += withdraw_fuel
+                                print(f"refueled {actor.name} from {target.name} for {withdraw_fuel}fdv")
+                                event_out.ok = True
+                                event_out.result['fuel_added'] = withdraw_fuel
+                                if Capability.SUPPLY in t_caps and t_caps[Capability.TANK]["current"] == 0:
+                                    # fuel cache exhausted
+                                    # todo: add GONE event
+                                    destroyed_entities.add(target)
+                            if Capability.BAY in actor.capabilities:
+                                e_bay = actor.capabilities[Capability.BAY]
+                                if e_bay["current"] < e_bay["max"]:
+                                    missing = e_bay["max"] - e_bay["current"]
+                                    e_bay["current"] = e_bay["max"]
                                     event_out.ok = True
-                                    event_out.result['fuel_added'] = withdraw_fuel
+                                    event_out.result['missiles_added'] = missing
+                    new_predictions, invalidations = self.updated_predictions(event_out)
+                    new_events.append(event_out)
                     print(event_out.ok, event_out.result)
             # update state changes queue for this interval based on processed prediction's consequences
             for isc in invalidations:
@@ -289,7 +310,7 @@ class Simulation:
             for p in new_predictions:
                 predicted_time = p[0]
                 if predicted_time < interval_end:
-                    # IMPORTANT CAVEAT CREATED by '<' ! for interval x, only events at start <= t < start+x are processed.
+                    # IMPORTANT CAVEAT IMPLIED by '<' : for interval x, only events at start <= t < start+x are processed.
                     # add to stack of unprocessed predictions in this interval's responsibility
                     print(f"adding {p} to interval [{interval_start}, {interval_end})")
                     state_changes.append(p)
