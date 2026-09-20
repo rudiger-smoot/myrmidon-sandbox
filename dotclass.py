@@ -44,8 +44,9 @@ class Command:
         self.parameters = parameters
 
 class Event:
-    types = BURN, SCAN, CAPTURE, FIRE, LOAD, UNLOAD, JETTISON, NO_FUEL, DETONATE, SPAWN, HEARTBEAT = range(11)
-    names = ['BURN', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'UNLOAD', 'JETTISON', 'NO_FUEL', 'DETONATE', 'SPAWN', 'HEARTBEAT']
+    types = BURN, SCAN, CAPTURE, FIRE, LOAD, UNLOAD, JETTISON, NO_FUEL, DETONATE, SPAWN, HEARTBEAT, GONE = range(12)
+    names = ['BURN', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'UNLOAD', 'JETTISON', 'NO_FUEL', 'DETONATE', 'SPAWN', 'HEARTBEAT',
+             'GONE']
     def __init__(self, time, evt, actor, parameters):
         self.time = time
         self.evt = evt
@@ -103,6 +104,9 @@ class PredictNofuel(Predictor):
                 if prediction[1].actor == evt.actor and prediction[1].evt == Event.NO_FUEL:
                     invalidations.add(prediction)
         return invalidations
+
+class PredictNothingFromDestruction(Predictor):
+    pass
 
 class Rules:
     INTERACTION_RANGE_LIMIT = 1000 # meters
