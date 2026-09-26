@@ -62,7 +62,7 @@ class Event:
         return hash((self.time, self.evt, self.actor, hash(paramset), hash(valset)))
 
     def __str__(self):
-        return f"!!evt {self.time} {self.actor} {self.names[self.evt]}!!"
+        return f"!!evt {self.time} {self.actor.name if self.actor else '?'} {self.names[self.evt]} {self.parameters}!!"
 
 class Capability:
     types = ENGINE, TANK, BAY, REFINE, SUPPLY, DETONATE = range(6)
@@ -106,7 +106,15 @@ class PredictNofuel(Predictor):
         return invalidations
 
 class PredictNothingFromDestruction(Predictor):
-    pass
+    def predictions(self, sim: Simulation, t: float, evt: Event) -> set[tuple]:
+        return set()
+
+    def invalidations(self, sim: Simulation, t: float, evt: Event, queue: set[tuple]) -> set[tuple]:
+        invalidations = set()
+        for prediction in queue:
+            if prediction[1].actor == evt.actor:
+                    invalidations.add(prediction)
+        return invalidations
 
 class Rules:
     INTERACTION_RANGE_LIMIT = 1000 # meters
@@ -117,6 +125,7 @@ class Simulation:
     predictors = {}  # map from event type to prediction function
     predictors[Event.BURN] = {PredictNofuel()}
     predictors[Event.LOAD] = {PredictNofuel()}
+    predictors[Event.GONE] = {PredictNothingFromDestruction()}
     for event_type in Event.types:
         if not event_type in predictors.keys():
             predictors[event_type] = set()
@@ -217,8 +226,8 @@ class Simulation:
                 e.v = e.v + dv
                 fuel_usage = mag(dv)
                 e.capabilities[Capability.TANK]["current"] -= fuel_usage
-                print(f"t={now} {e.name} used {fuel_usage}fdv of fuel now at {e.capabilities[Capability.TANK]["current"]}fdv")
-                print(f"t={now} {e.name} a={mag(e.a)} dr={mag(dr)}m dv={mag(dv)}m/s current v={mag(e.v)}m/s")
+                #print(f"t={now} {e.name} used {fuel_usage}fdv of fuel now at {e.capabilities[Capability.TANK]["current"]}fdv")
+                #print(f"t={now} {e.name} a={mag(e.a)} dr={mag(dr)}m dv={mag(dv)}m/s current v={mag(e.v)}m/s")
             if isinstance(reason, Event):
                 if reason.evt == Event.NO_FUEL:
                     print(f"t={now} processing prediction: {actor.name} fuel exhaustion")
@@ -246,7 +255,9 @@ class Simulation:
                     else:
                         actor.a = np.array((0, 0, 0))
                     new_events.append(Event(now, Event.BURN, actor, reason.parameters))
-                    new_predictions, invalidations = self.updated_predictions(Event(now, Event.BURN, actor, reason.parameters))
+                    updates = self.updated_predictions(Event(now, Event.BURN, actor, reason.parameters))
+                    new_predictions.update(updates[0])
+                    invalidations.update(updates[1])
                 elif reason.cmd == Command.LOAD:
                     print("executing load")
                     event_out = Event(reason.time, Event.LOAD, reason.actor, reason.parameters)
@@ -270,7 +281,7 @@ class Simulation:
                             event_out.ok = ok = False
                             event_out.result = {'msg': f'you are {vel_diff}m/s faster than target, must be within {self.rules.INTERACTION_SPEED_LIMIT}m/s'}
                         if not (Capability.TANK in target.capabilities and
-                                (Capability.REFINE in target.capabilities or Capability.REFINE in target.capabilities)):
+                                (Capability.REFINE in target.capabilities or Capability.SUPPLY in target.capabilities)):
                             event_out.ok = ok = False
                             event_out.result = {
                                 'msg': f'target must be planet or fuel cache'}
@@ -286,26 +297,35 @@ class Simulation:
                             if e_tank["current"] < e_tank["max"]:
                                 missing_fuel = e_tank["max"] - e_tank["current"]
                                 withdraw_fuel = min(missing_fuel, t_caps[Capability.TANK]["current"])
-                                t_caps[Capability.TANK]["current"] -= withdraw_fuel
+                                target.capabilities[Capability.TANK]["current"] -= withdraw_fuel
                                 e_tank["current"] += withdraw_fuel
                                 print(f"refueled {actor.name} from {target.name} for {withdraw_fuel}fdv")
                                 event_out.ok = True
                                 event_out.result['fuel_added'] = withdraw_fuel
-                                if Capability.SUPPLY in t_caps and t_caps[Capability.TANK]["current"] == 0:
+                                if Capability.SUPPLY in t_caps and target.capabilities[Capability.TANK]["current"] == 0:
                                     # fuel cache exhausted
-                                    # todo: add GONE event
+                                    print("used up all of fuel cache")
+                                    death_event = Event(reason.time, Event.GONE, target, {"cause": event_out})
+                                    updates = self.updated_predictions(death_event)
+                                    new_predictions.update(updates[0])
+                                    invalidations.update(updates[1])
+                                    new_events.append(death_event)
                                     destroyed_entities.add(target)
-                            if Capability.BAY in actor.capabilities:
+                            if Capability.BAY in actor.capabilities and Capability.REFINE in target.capabilities:
                                 e_bay = actor.capabilities[Capability.BAY]
                                 if e_bay["current"] < e_bay["max"]:
                                     missing = e_bay["max"] - e_bay["current"]
                                     e_bay["current"] = e_bay["max"]
                                     event_out.ok = True
                                     event_out.result['missiles_added'] = missing
-                    new_predictions, invalidations = self.updated_predictions(event_out)
+                    updates = self.updated_predictions(event_out)
+                    new_predictions.update(updates[0])
+                    invalidations.update(updates[1])
                     new_events.append(event_out)
                     print(event_out.ok, event_out.result)
             # update state changes queue for this interval based on processed prediction's consequences
+            for entity in destroyed_entities:
+                self.entities.remove(entity)
             for isc in invalidations:
                 try:
                     state_changes.remove(isc)
