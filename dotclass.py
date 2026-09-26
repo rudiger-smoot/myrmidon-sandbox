@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import math
+from wsgiref.util import request_uri
 
 import numpy as np
 
@@ -43,13 +44,17 @@ class Command:
         self.parameters = parameters
 
 class Event:
-    types = BURN, SCAN, CAPTURE, FIRE, LOAD, UNLOAD, JETTISON, NO_FUEL, DETONATE, SPAWN, HEARTBEAT = range(11)
-    names = ['BURN', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'UNLOAD', 'JETTISON', 'NO_FUEL', 'DETONATE', 'SPAWN', 'HEARTBEAT']
+    types = BURN, SCAN, CAPTURE, FIRE, LOAD, UNLOAD, JETTISON, NO_FUEL, DETONATE, SPAWN, HEARTBEAT, GONE = range(12)
+    names = ['BURN', 'SCAN', 'CAPTURE', 'FIRE', 'LOAD', 'UNLOAD', 'JETTISON', 'NO_FUEL', 'DETONATE', 'SPAWN', 'HEARTBEAT',
+             'GONE']
     def __init__(self, time, evt, actor, parameters):
         self.time = time
         self.evt = evt
         self.actor = actor
         self.parameters: dict = parameters
+
+        self.ok = True
+        self.result = {}
 
     def __hash__(self):
         paramset = tuple(self.parameters.keys())
@@ -57,12 +62,12 @@ class Event:
         return hash((self.time, self.evt, self.actor, hash(paramset), hash(valset)))
 
     def __str__(self):
-        return f"!!evt {self.time} {self.actor} {self.names[self.evt]}!!"
+        return f"!!evt {self.time} {self.actor.name if self.actor else '?'} {self.names[self.evt]} {self.parameters}!!"
 
 class Capability:
-    types = ENGINE, TANK, BAY, REFINE, DETONATE = range(5)
-    span = range(5)
-    names = ['ENGINE', 'TANK', 'BAY', 'REFINE', 'DETONATE']
+    types = ENGINE, TANK, BAY, REFINE, SUPPLY, DETONATE = range(6)
+    span = range(6)
+    names = ['ENGINE', 'TANK', 'BAY', 'REFINE', 'SUPPLY', 'DETONATE']
 
 class Predictor(ABC):
     @abstractmethod
@@ -79,7 +84,7 @@ cap_orders = {Capability.ENGINE: [Command.BURN, Command.SCAN, Command.CAPTURE],
 def mag(n: np.array) -> float:
     return np.linalg.norm(n)
 
-class PredictNofuelFromBurn(Predictor):
+class PredictNofuel(Predictor):
     def predictions(self, sim: Simulation, t: float, evt: Event) -> set[tuple]:
         predictions = set()
         entity: Entity = evt.actor
@@ -100,13 +105,31 @@ class PredictNofuelFromBurn(Predictor):
                     invalidations.add(prediction)
         return invalidations
 
+class PredictNothingFromDestruction(Predictor):
+    def predictions(self, sim: Simulation, t: float, evt: Event) -> set[tuple]:
+        return set()
+
+    def invalidations(self, sim: Simulation, t: float, evt: Event, queue: set[tuple]) -> set[tuple]:
+        invalidations = set()
+        for prediction in queue:
+            if prediction[1].actor == evt.actor:
+                    invalidations.add(prediction)
+        return invalidations
+
+class Rules:
+    INTERACTION_RANGE_LIMIT = 1000 # meters
+    INTERACTION_SPEED_LIMIT = 100 # m/s
+    PLACEHOLDER_SCAN_RANGE = 150000 # meters
 
 class Simulation:
     predictors = {}  # map from event type to prediction function
-    predictors[Event.BURN] = {PredictNofuelFromBurn()}
+    predictors[Event.BURN] = {PredictNofuel()}
+    predictors[Event.LOAD] = {PredictNofuel()}
+    predictors[Event.GONE] = {PredictNothingFromDestruction()}
     for event_type in Event.types:
         if not event_type in predictors.keys():
             predictors[event_type] = set()
+    rules = Rules
     def __init__(self, time, entities: list[Entity], orders: list[Command]):
         self.time = time
         self.entities = entities
@@ -131,7 +154,11 @@ class Simulation:
             return True
         return False
 
-    def update_predictions(self, evt: Event):
+    def realize_event(self, evt: Event):
+        self.events.append(evt)
+        return self.updated_predictions(evt)
+
+    def updated_predictions(self, evt: Event):
         predictions = set()
         invalidations = set()
         queue = set(filter(lambda sc: sc[0] >= evt.time, self.state_eval))
@@ -153,6 +180,13 @@ class Simulation:
                 predictions.add(prediction)
         print(f" T={self.time} adding predictions", predictions)
         return predictions
+
+    def entity_by_name(self, name: str) -> Entity:
+        e = None
+        for e in self.entities:
+            if e.name == name:
+                return e
+        return e
 
     def entities_with_capability(self, capabilities):
         es = set()
@@ -184,7 +218,7 @@ class Simulation:
             actor = reason.actor
             now = change_time
             self.time = now
-            exhausted_entities = set()
+            destroyed_entities = set()
             new_predictions, invalidations = set(), set()
             for e in self.entities:
                 dr, dv = self.motion(e.v, e.a, now - last_start)
@@ -192,8 +226,8 @@ class Simulation:
                 e.v = e.v + dv
                 fuel_usage = mag(dv)
                 e.capabilities[Capability.TANK]["current"] -= fuel_usage
-                print(f"t={now} {e.name} used {fuel_usage}fdv of fuel now at {e.capabilities[Capability.TANK]["current"]}fdv")
-                print(f"t={now} {e.name} a={mag(e.a)} dr={mag(dr)}m dv={mag(dv)}m/s current v={mag(e.v)}m/s")
+                #print(f"t={now} {e.name} used {fuel_usage}fdv of fuel now at {e.capabilities[Capability.TANK]["current"]}fdv")
+                #print(f"t={now} {e.name} a={mag(e.a)} dr={mag(dr)}m dv={mag(dv)}m/s current v={mag(e.v)}m/s")
             if isinstance(reason, Event):
                 if reason.evt == Event.NO_FUEL:
                     print(f"t={now} processing prediction: {actor.name} fuel exhaustion")
@@ -221,8 +255,77 @@ class Simulation:
                     else:
                         actor.a = np.array((0, 0, 0))
                     new_events.append(Event(now, Event.BURN, actor, reason.parameters))
-                    new_predictions, invalidations = self.update_predictions(Event(now, Event.BURN, actor, reason.parameters))
+                    updates = self.updated_predictions(Event(now, Event.BURN, actor, reason.parameters))
+                    new_predictions.update(updates[0])
+                    invalidations.update(updates[1])
+                elif reason.cmd == Command.LOAD:
+                    print("executing load")
+                    event_out = Event(reason.time, Event.LOAD, reason.actor, reason.parameters)
+                    target_candidates = tuple(filter(lambda e: mag(actor.r - e.r) <= self.rules.PLACEHOLDER_SCAN_RANGE, self.entities))
+                    target = None
+                    for tc in target_candidates:
+                        if tc.name == reason.parameters["target"]:
+                            target = tc
+                    if target is None:
+                        event_out.ok = False
+                        event_out.result = {'msg':f'no visible entity named {reason.parameters["target"]}'}
+                    else:
+                        distance = mag(actor.r - target.r)
+                        vel_diff = mag(actor.v - target.v)
+                        print(actor.r, actor.v, distance)
+                        ok = True
+                        if distance > self.rules.INTERACTION_RANGE_LIMIT:
+                            event_out.ok = ok = False
+                            event_out.result = {'msg': f'target is greater than {self.rules.INTERACTION_RANGE_LIMIT}m away'}
+                        if vel_diff > self.rules.INTERACTION_SPEED_LIMIT:
+                            event_out.ok = ok = False
+                            event_out.result = {'msg': f'you are {vel_diff}m/s faster than target, must be within {self.rules.INTERACTION_SPEED_LIMIT}m/s'}
+                        if not (Capability.TANK in target.capabilities and
+                                (Capability.REFINE in target.capabilities or Capability.SUPPLY in target.capabilities)):
+                            event_out.ok = ok = False
+                            event_out.result = {
+                                'msg': f'target must be planet or fuel cache'}
+                        if Capability.REFINE in target.capabilities and target.allegiance != actor.allegiance:
+                            event_out.ok = ok = False
+                            event_out.result = {
+                                'msg': f"can't reload from non-allied planet"}
+                        if ok:
+                            event_out.result = {'fuel_added': 0, 'missiles_added': 0}
+                            # load fuel and missiles
+                            e_tank = actor.capabilities[Capability.TANK]
+                            t_caps = target.capabilities
+                            if e_tank["current"] < e_tank["max"]:
+                                missing_fuel = e_tank["max"] - e_tank["current"]
+                                withdraw_fuel = min(missing_fuel, t_caps[Capability.TANK]["current"])
+                                target.capabilities[Capability.TANK]["current"] -= withdraw_fuel
+                                e_tank["current"] += withdraw_fuel
+                                print(f"refueled {actor.name} from {target.name} for {withdraw_fuel}fdv")
+                                event_out.ok = True
+                                event_out.result['fuel_added'] = withdraw_fuel
+                                if Capability.SUPPLY in t_caps and target.capabilities[Capability.TANK]["current"] == 0:
+                                    # fuel cache exhausted
+                                    print("used up all of fuel cache")
+                                    death_event = Event(reason.time, Event.GONE, target, {"cause": event_out})
+                                    updates = self.updated_predictions(death_event)
+                                    new_predictions.update(updates[0])
+                                    invalidations.update(updates[1])
+                                    new_events.append(death_event)
+                                    destroyed_entities.add(target)
+                            if Capability.BAY in actor.capabilities and Capability.REFINE in target.capabilities:
+                                e_bay = actor.capabilities[Capability.BAY]
+                                if e_bay["current"] < e_bay["max"]:
+                                    missing = e_bay["max"] - e_bay["current"]
+                                    e_bay["current"] = e_bay["max"]
+                                    event_out.ok = True
+                                    event_out.result['missiles_added'] = missing
+                    updates = self.updated_predictions(event_out)
+                    new_predictions.update(updates[0])
+                    invalidations.update(updates[1])
+                    new_events.append(event_out)
+                    print(event_out.ok, event_out.result)
             # update state changes queue for this interval based on processed prediction's consequences
+            for entity in destroyed_entities:
+                self.entities.remove(entity)
             for isc in invalidations:
                 try:
                     state_changes.remove(isc)
@@ -231,7 +334,7 @@ class Simulation:
             for p in new_predictions:
                 predicted_time = p[0]
                 if predicted_time < interval_end:
-                    # IMPORTANT CAVEAT CREATED by '<' ! for interval x, only events at start <= t < start+x are processed.
+                    # IMPORTANT CAVEAT IMPLIED by '<' : for interval x, only events at start <= t < start+x are processed.
                     # add to stack of unprocessed predictions in this interval's responsibility
                     print(f"adding {p} to interval [{interval_start}, {interval_end})")
                     state_changes.append(p)

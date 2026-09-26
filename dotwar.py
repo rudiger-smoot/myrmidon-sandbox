@@ -29,18 +29,14 @@ with open(universe, 'r') as universe_file:
         ev = np.array([float(v) for v in consttokens[5:5+3]])
         ea = np.array([float(a) for a in consttokens[8:8+3]])
         eallegiance = consttokens[9]
-        captokens = [token.upper() for token in tokens[10:]]
+        captokens = [token.upper() for token in tokens[12:]]
         capindex = 0
         while capindex < len(captokens):
             captoken = captokens[capindex]
             skip = 1
             names = ['ENGINE', 'TANK', 'BAY', 'REFINE', 'DETONATE']
-            if captoken == 'ENGINE':
-                ecaps[Capability.ENGINE] = {}
-            elif captoken == 'REFINE':
-                ecaps[Capability.REFINE] = {}
-            elif captoken == 'DETONATE':
-                ecaps[Capability.DETONATE] = {}
+            if captoken not in ['TANK', 'BAY']:
+                ecaps[Capability.names.index(captoken)] = {}
             elif captoken == 'TANK':
                 tcurrent = int(captokens[capindex+1])
                 tmax = int(captokens[capindex + 2])
@@ -69,6 +65,9 @@ if orders:
                 if ctype == "BURN":
                     ctype = Command.BURN
                     cargs["a"] = np.array([float(a) for a in argtokens[0:4]])
+                elif ctype == "LOAD":
+                    ctype = Command.LOAD
+                    cargs["target"] = argtokens[0]
                 else:
                     raise Exception(f"unknown command {ctype}")
                 actor = tuple(filter(lambda e: e.name == cvessel, entities))
