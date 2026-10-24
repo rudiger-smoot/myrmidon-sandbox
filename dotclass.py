@@ -16,6 +16,7 @@ class Entity:
         self.allegiance = allegiance
         self.capabilities = capabilities
         self.orders = []
+        self.event_log = []
 
         fc = {}
         for k in self.capabilities:
@@ -25,12 +26,18 @@ class Entity:
                 fc[k] = self.capabilities[k]
         self.capabilities = fc
 
+    def get_capability(self, cap_type):
+        return self.capabilities.get(cap_type, None)
+
     def time_til_fuel_exhaustion(self):
         fuel = self.capabilities[Capability.TANK]["current"]
         if mag(self.a):
             time_to_exhaustion = fuel / mag(self.a)
         else: time_to_exhaustion = None
         return time_to_exhaustion
+
+    def witness_event(self, evt: Event):
+        self.event_log.append(evt)
 
 
 class Command:
@@ -61,13 +68,13 @@ class Event:
         valset = tuple(self.parameters.values())
         return hash((self.time, self.evt, self.actor, hash(paramset), hash(valset)))
 
-    def __str__(self):
+    def __repr__(self):
         return f"!!evt {self.time} {self.actor.name if self.actor else '?'} {self.names[self.evt]} {self.parameters}!!"
 
 class Capability:
-    types = ENGINE, TANK, BAY, REFINE, SUPPLY, DETONATE = range(6)
-    span = range(6)
-    names = ['ENGINE', 'TANK', 'BAY', 'REFINE', 'SUPPLY', 'DETONATE']
+    types = ENGINE, TANK, BAY, REFINE, SUPPLY, DETONATE, SCANNER, DEEP_SPACE_SCANNER = range(8)
+    span = range(8)
+    names = ['ENGINE', 'TANK', 'BAY', 'REFINE', 'SUPPLY', 'DETONATE', 'SCANNER', 'DEEP_SPACE_SCANNER']
 
 class Predictor(ABC):
     @abstractmethod
@@ -77,9 +84,10 @@ class Predictor(ABC):
     def invalidations(self, sim: Simulation, t: float, evt: Event, queue: set[tuple]) -> set[tuple]:
         pass
 
-cap_orders = {Capability.ENGINE: [Command.BURN, Command.SCAN, Command.CAPTURE],
-              Capability.TANK:   [Command.LOAD, Command.JETTISON],
-              Capability.BAY:    [Command.FIRE]}
+cap_orders = {Capability.ENGINE:  [Command.BURN, Command.CAPTURE],
+              Capability.TANK:    [Command.LOAD, Command.JETTISON],
+              Capability.BAY:     [Command.FIRE],
+              Capability.SCANNER: [Command.SCAN]}
 
 def mag(n: np.array) -> float:
     return np.linalg.norm(n)
@@ -119,7 +127,12 @@ class PredictNothingFromDestruction(Predictor):
 class Rules:
     INTERACTION_RANGE_LIMIT = 1000 # meters
     INTERACTION_SPEED_LIMIT = 100 # m/s
-    PLACEHOLDER_SCAN_RANGE = 150000 # meters
+    SCAN_RANGE = 150000 # meters
+    DEEP_SCAN_RANGE = 150000*2 # meters
+    MAX_SHIP_IMPULSE = 1235 # m/s/s, equal to dotwar1 limit
+    MAX_MISSILE_IMPULSE = MAX_SHIP_IMPULSE * 2
+    LIGHTSPEED = 1079251200 * 1/60 * 1000# m/s, equal to dotwar1 limit
+    SPEED_LIMIT = LIGHTSPEED * 0.9 # .9c
 
 class Simulation:
     predictors = {}  # map from event type to prediction function
@@ -233,9 +246,10 @@ class Simulation:
                     print(f"t={now} processing prediction: {actor.name} fuel exhaustion")
                     if Capability.TANK in actor.capabilities:
                         e_fuel = actor.capabilities[Capability.TANK]["current"]
-                        if math.isclose(e_fuel, 0, abs_tol=FDV_PREDICTION_ABSOLUTE_TOLERANCE):
-                            # todo: deal with floating point comparison tolerances
+                        if math.isclose(e_fuel, 0, abs_tol=FDV_PREDICTION_ABSOLUTE_TOLERANCE) or e_fuel < 0:
                             print(f" prediction true {actor.name} at {e_fuel}fdv")
+                            if e_fuel < 0: print(" warning: fuel negative")
+                            if abs(e_fuel) <= 1: print(" warning: floating point comparison")
                             actor.capabilities[Capability.TANK]["current"] = 0
                             new_events.append(
                                 Event(now, Event.NO_FUEL, actor, {})
@@ -244,14 +258,39 @@ class Simulation:
                         else:
                             print(f" prediction false {actor.name} fuel={e_fuel}fdv")
             elif isinstance(reason, Command):
-                if reason.cmd == Command.BURN:
-                    #print("executing burn")
-                    reason: Command = reason
+                reason: Command = reason
+                if reason.cmd == Command.SCAN:
+                    range = 0
+                    if Capability.SCANNER in reason.actor.capabilities:
+                        range = self.rules.SCAN_RANGE
+                    elif Capability.DEEP_SPACE_SCANNER in reason.actor.capabilities:
+                        range = self.rules.DEEP_SCAN_RANGE
+                    event_out = Event(reason.time, Event.SCAN, reason.actor, reason.parameters)
+                    event_out.ok = True
+                    event_out.result = {'range': range, 'contacts':[]}
+                    for e in self.entities:
+                        contact = {}
+                        if e is not reason.actor and mag(e.r - actor.r) <= range:
+                            print(f"{actor.name} just saw {e.name} @ {mag(e.r - actor.r)}m away")
+                            contact['name'] = e.name
+                            contact['kinematics'] = {'r': e.r, 'v': e.v, 'a': e.a}
+                            contact['kind'] = e.kind
+                            contact['allegiance'] = e.allegiance
+                            event_out.result['contacts'].append(contact)
+                    if reason.actor.get_capability(Capability.DEEP_SPACE_SCANNER):
+                        for e in self.entities:
+                            if e is not reason.actor and e.allegiance == reason.actor.allegiance:
+                                e.witness_event(event_out)
+                    new_events.append(event_out)
+                elif reason.cmd == Command.BURN:
                     a = reason.parameters["a"]
                     print(f"t={reason.time} burning {a}")
                     e_fuel = actor.capabilities[Capability.TANK]["current"]
                     if e_fuel:
-                        actor.a = a #todo: add acceleration limits
+                        if mag(a) > self.rules.MAX_SHIP_IMPULSE:
+                            actor.a = self.rules.MAX_SHIP_IMPULSE * (a/mag(a))
+                            print(f"limited burn of {mag(a)}m/s to {self.rules.MAX_SHIP_IMPULSE}m/s")
+                        else: actor.a = a
                     else:
                         actor.a = np.array((0, 0, 0))
                     new_events.append(Event(now, Event.BURN, actor, reason.parameters))
@@ -261,7 +300,7 @@ class Simulation:
                 elif reason.cmd == Command.LOAD:
                     print("executing load")
                     event_out = Event(reason.time, Event.LOAD, reason.actor, reason.parameters)
-                    target_candidates = tuple(filter(lambda e: mag(actor.r - e.r) <= self.rules.PLACEHOLDER_SCAN_RANGE, self.entities))
+                    target_candidates = tuple(filter(lambda e: mag(actor.r - e.r) <= self.rules.SCAN_RANGE, self.entities))
                     target = None
                     for tc in target_candidates:
                         if tc.name == reason.parameters["target"]:
@@ -340,5 +379,9 @@ class Simulation:
                     state_changes.append(p)
                 state_changes = sorted(state_changes, key=lambda s: s[0])
             last_start = now
+        for evt in new_events:
+            for e in self.entities:
+                if (mag(evt.actor.r - e.r) <= self.rules.SCAN_RANGE) and (evt not in e.event_log):
+                    e.witness_event(evt)
         self.events += new_events
         self.time = now

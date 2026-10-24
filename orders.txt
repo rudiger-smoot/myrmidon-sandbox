@@ -1,3 +1,5 @@
-limonite 25 BURN 0 50 0
+limonite 25 BURN 0 1200 0
 limonite 26 LOAD stash
 limonite 30 BURN 0 25 0
+limonite 35 SCAN
+earth 36 SCAN

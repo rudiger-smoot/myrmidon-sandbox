@@ -34,7 +34,6 @@ with open(universe, 'r') as universe_file:
         while capindex < len(captokens):
             captoken = captokens[capindex]
             skip = 1
-            names = ['ENGINE', 'TANK', 'BAY', 'REFINE', 'DETONATE']
             if captoken not in ['TANK', 'BAY']:
                 ecaps[Capability.names.index(captoken)] = {}
             elif captoken == 'TANK':
@@ -68,6 +67,8 @@ if orders:
                 elif ctype == "LOAD":
                     ctype = Command.LOAD
                     cargs["target"] = argtokens[0]
+                elif ctype == "SCAN":
+                    ctype = Command.SCAN
                 else:
                     raise Exception(f"unknown command {ctype}")
                 actor = tuple(filter(lambda e: e.name == cvessel, entities))
@@ -81,5 +82,5 @@ if orders:
 sim = Simulation(0, entities, [])
 sim.run(endtime)
 print("total events", list(str(e) for e in sim.events))
-print(tuple(e.r for e in sim.entities))
+print(tuple(e.event_log for e in sim.entities))
 print(sim.predict_fuel_exhaustion())
