@@ -69,6 +69,10 @@ if orders:
                     cargs["target"] = argtokens[0]
                 elif ctype == "SCAN":
                     ctype = Command.SCAN
+                elif ctype == "FIRE":
+                    ctype = Command.FIRE
+                    cargs["a"] = np.array([float(a) for a in argtokens[0:4]])
+                    cargs["countdown"] = float(argtokens[3])
                 else:
                     raise Exception(f"unknown command {ctype}")
                 actor = tuple(filter(lambda e: e.name == cvessel, entities))

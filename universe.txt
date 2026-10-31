@@ -1,5 +1,5 @@
 # name kind   r r r v v v a a a allegiance [capabilities ...]
-limonite ship 0 0 0 0 0 0 0 0 0 defenders engine tank 100 100 bay 0 10 scanner
+limonite ship 0 0 0 0 0 0 0 0 0 defenders engine tank 100 100 bay 1 10 scanner
 earth planet  0 0 0 0 0 0 0 0 0 defenders refine tank 500 500 deep_space_scanner
 stash cache   0 10 0 0 0 0 0 0 0 attackers supply tank 50 500
 unseen cache  0 -150000 0 0 0 0 0 0 0 attackers supply tank 50 500

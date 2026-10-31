@@ -17,6 +17,7 @@ class Entity:
         self.capabilities = capabilities
         self.orders = []
         self.event_log = []
+        self.last_child_id = 0
 
         fc = {}
         for k in self.capabilities:
@@ -39,6 +40,11 @@ class Entity:
     def witness_event(self, evt: Event):
         self.event_log.append(evt)
 
+    def spawn_child(self, kind, acc, caps) -> Entity:
+        child = Entity(f"{self.name}.{self.last_child_id}", kind,
+                         self.r, self.v, acc, self.allegiance,caps)
+        self.last_child_id += 1
+        return child
 
 class Command:
     types = BURN, SCAN, CAPTURE, FIRE, LOAD, JETTISON, DETONATE = range(7)
@@ -130,7 +136,7 @@ class Rules:
     SCAN_RANGE = 150000 # meters
     DEEP_SCAN_RANGE = 150000*2 # meters
     MAX_SHIP_IMPULSE = 1235 # m/s/s, equal to dotwar1 limit
-    MAX_MISSILE_IMPULSE = MAX_SHIP_IMPULSE * 2
+    MAX_MISSILE_IMPULSE = MAX_SHIP_IMPULSE * 2 # m/s/s
     LIGHTSPEED = 1079251200 * 1/60 * 1000# m/s, equal to dotwar1 limit
     SPEED_LIMIT = LIGHTSPEED * 0.9 # .9c
 
@@ -237,10 +243,9 @@ class Simulation:
                 dr, dv = self.motion(e.v, e.a, now - last_start)
                 e.r = e.r + dr
                 e.v = e.v + dv
-                fuel_usage = mag(dv)
-                e.capabilities[Capability.TANK]["current"] -= fuel_usage
-                #print(f"t={now} {e.name} used {fuel_usage}fdv of fuel now at {e.capabilities[Capability.TANK]["current"]}fdv")
-                #print(f"t={now} {e.name} a={mag(e.a)} dr={mag(dr)}m dv={mag(dv)}m/s current v={mag(e.v)}m/s")
+                if e.get_capability(Capability.TANK):
+                    fuel_usage = mag(dv)
+                    e.capabilities[Capability.TANK]["current"] -= fuel_usage
             if isinstance(reason, Event):
                 if reason.evt == Event.NO_FUEL:
                     print(f"t={now} processing prediction: {actor.name} fuel exhaustion")
@@ -362,6 +367,27 @@ class Simulation:
                     invalidations.update(updates[1])
                     new_events.append(event_out)
                     print(event_out.ok, event_out.result)
+                elif reason.cmd == Command.FIRE:
+                    print("processing fire event")
+                    event_out = Event(reason.time, Event.FIRE, reason.actor, reason.parameters)
+                    actor = reason.actor
+                    if not actor.get_capability(Capability.BAY) or actor.get_capability(Capability.BAY)["current"] == 0:
+                        event_out.ok = False
+                        event_out.result['msg'] = "you have no torpedo bay or 0 torpedoes"
+                    else:
+                        # spawn torp and deplete supply
+                        ta, countdown = reason.parameters['a'], reason.parameters['countdown']
+                        if mag(ta) > self.rules.MAX_MISSILE_IMPULSE:
+                            ta = self.rules.MAX_MISSILE_IMPULSE * (ta / mag(ta))
+                            print(f"limited torpedo burn of {mag(ta)}m/s/s to {self.rules.MAX_MISSILE_IMPULSE}m/s/s")
+                        torpedo = actor.spawn_child("torpedo", ta, {Capability.DETONATE:{'countdown':countdown}})
+                        self.entities.append(torpedo)
+                        print(f"{actor.name} fired torpedo {torpedo.name}")
+                    updates = self.updated_predictions(event_out)
+                    new_predictions.update(updates[0])
+                    invalidations.update(updates[1])
+                    new_events.append(event_out)
+
             # update state changes queue for this interval based on processed prediction's consequences
             for entity in destroyed_entities:
                 self.entities.remove(entity)
@@ -382,6 +408,7 @@ class Simulation:
         for evt in new_events:
             for e in self.entities:
                 if (mag(evt.actor.r - e.r) <= self.rules.SCAN_RANGE) and (evt not in e.event_log):
+                    # todo: don't witness failed orders
                     e.witness_event(evt)
         self.events += new_events
         self.time = now
