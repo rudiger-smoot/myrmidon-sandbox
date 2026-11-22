@@ -197,6 +197,8 @@ class Simulation:
                 absolute_time = self.time +time_to_exhaustion
                 prediction = (absolute_time, Event(absolute_time, Event.NO_FUEL, e, {}))
                 predictions.add(prediction)
+                #if absolute_time < 0 or time_to_exhaustion < 0:
+                #    print(f"{e.name} {e.get_capability(Capability.TANK)["current"]}fdv {time_to_exhaustion}s to exhaustion at {absolute_time}s epoch time")
         print(f" T={self.time} adding predictions", predictions)
         return predictions
 
@@ -317,6 +319,7 @@ class Simulation:
                         distance = mag(actor.r - target.r)
                         vel_diff = mag(actor.v - target.v)
                         print(actor.r, actor.v, distance)
+                        print(target.r, target.v, vel_diff)
                         ok = True
                         if distance > self.rules.INTERACTION_RANGE_LIMIT:
                             event_out.ok = ok = False
