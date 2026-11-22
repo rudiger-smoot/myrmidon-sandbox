@@ -71,7 +71,7 @@ if orders:
                     ctype = Command.SCAN
                 elif ctype == "FIRE":
                     ctype = Command.FIRE
-                    cargs["a"] = np.array([float(a) for a in argtokens[0:4]])
+                    cargs["a"] = np.array([float(a) for a in argtokens[0:3]])
                     cargs["countdown"] = float(argtokens[3])
                 else:
                     raise Exception(f"unknown command {ctype}")
