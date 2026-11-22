@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import math
-from wsgiref.util import request_uri
+from typing import Any
 
 import numpy as np
+from numpy import floating
 
 FDV_PREDICTION_ABSOLUTE_TOLERANCE = 1e-12 #todo: APPROXIMATION
 
@@ -17,6 +18,7 @@ class Entity:
         self.capabilities = capabilities
         self.orders = []
         self.event_log = []
+        self.last_child_id = 0
 
         fc = {}
         for k in self.capabilities:
@@ -39,6 +41,11 @@ class Entity:
     def witness_event(self, evt: Event):
         self.event_log.append(evt)
 
+    def spawn_child(self, kind, acc, caps) -> Entity:
+        child = Entity(f"{self.name}.{self.last_child_id}", kind,
+                         self.r, self.v, acc, self.allegiance,caps)
+        self.last_child_id += 1
+        return child
 
 class Command:
     types = BURN, SCAN, CAPTURE, FIRE, LOAD, JETTISON, DETONATE = range(7)
@@ -89,7 +96,7 @@ cap_orders = {Capability.ENGINE:  [Command.BURN, Command.CAPTURE],
               Capability.BAY:     [Command.FIRE],
               Capability.SCANNER: [Command.SCAN]}
 
-def mag(n: np.array) -> float:
+def mag(n: np.array) -> floating[Any]:
     return np.linalg.norm(n)
 
 class PredictNofuel(Predictor):
@@ -130,15 +137,13 @@ class Rules:
     SCAN_RANGE = 150000 # meters
     DEEP_SCAN_RANGE = 150000*2 # meters
     MAX_SHIP_IMPULSE = 1235 # m/s/s, equal to dotwar1 limit
-    MAX_MISSILE_IMPULSE = MAX_SHIP_IMPULSE * 2
+    MAX_MISSILE_IMPULSE = MAX_SHIP_IMPULSE * 2 # m/s/s
     LIGHTSPEED = 1079251200 * 1/60 * 1000# m/s, equal to dotwar1 limit
     SPEED_LIMIT = LIGHTSPEED * 0.9 # .9c
 
 class Simulation:
-    predictors = {}  # map from event type to prediction function
-    predictors[Event.BURN] = {PredictNofuel()}
-    predictors[Event.LOAD] = {PredictNofuel()}
-    predictors[Event.GONE] = {PredictNothingFromDestruction()}
+    predictors = {Event.BURN: {PredictNofuel()}, Event.LOAD: {PredictNofuel()},
+                  Event.GONE: {PredictNothingFromDestruction()}}  # map from event type to prediction function
     for event_type in Event.types:
         if not event_type in predictors.keys():
             predictors[event_type] = set()
@@ -154,7 +159,8 @@ class Simulation:
         self.state_eval.update(self.predict_fuel_exhaustion())
         print(self.state_eval)
 
-    def motion(self, v: np.array, a: np.array, dt: float) -> tuple:
+    @staticmethod
+    def motion(v: np.array, a: np.array, dt: float) -> tuple:
         dr = [(v[0] * dt) + 0.5 * a[0] * (dt ** 2),
               (v[1] * dt) + 0.5 * a[1] * (dt ** 2),
               (v[2] * dt) + 0.5 * a[2] * (dt ** 2)]
@@ -171,15 +177,18 @@ class Simulation:
         self.events.append(evt)
         return self.updated_predictions(evt)
 
-    def updated_predictions(self, evt: Event):
+    def updated_predictions(self, events: list[Event, ...] | Event):
+        if isinstance(events, Event):
+            events = (events,)
         predictions = set()
         invalidations = set()
-        queue = set(filter(lambda sc: sc[0] >= evt.time, self.state_eval))
-        for predictor in self.predictors[evt.evt]:
-            predictions.update(predictor.predictions(None, evt.time, evt))
-            invalidations.update(predictor.invalidations(self, evt.time, evt, queue))
-        self.state_eval = self.state_eval.difference(invalidations)
-        self.state_eval.update(predictions)
+        for evt in events:
+            queue = set(filter(lambda sc: sc[0] >= evt.time, self.state_eval))
+            for predictor in self.predictors[evt.evt]:
+                predictions.update(predictor.predictions(self, evt.time, evt))
+                invalidations.update(predictor.invalidations(self, evt.time, evt, queue))
+            self.state_eval = self.state_eval.difference(invalidations)
+            self.state_eval.update(predictions)
         return predictions, invalidations
 
     def predict_fuel_exhaustion(self):
@@ -191,6 +200,8 @@ class Simulation:
                 absolute_time = self.time +time_to_exhaustion
                 prediction = (absolute_time, Event(absolute_time, Event.NO_FUEL, e, {}))
                 predictions.add(prediction)
+                #if absolute_time < 0 or time_to_exhaustion < 0:
+                #    print(f"{e.name} {e.get_capability(Capability.TANK)["current"]}fdv {time_to_exhaustion}s to exhaustion at {absolute_time}s epoch time")
         print(f" T={self.time} adding predictions", predictions)
         return predictions
 
@@ -237,10 +248,9 @@ class Simulation:
                 dr, dv = self.motion(e.v, e.a, now - last_start)
                 e.r = e.r + dr
                 e.v = e.v + dv
-                fuel_usage = mag(dv)
-                e.capabilities[Capability.TANK]["current"] -= fuel_usage
-                #print(f"t={now} {e.name} used {fuel_usage}fdv of fuel now at {e.capabilities[Capability.TANK]["current"]}fdv")
-                #print(f"t={now} {e.name} a={mag(e.a)} dr={mag(dr)}m dv={mag(dv)}m/s current v={mag(e.v)}m/s")
+                if e.get_capability(Capability.TANK):
+                    fuel_usage = mag(dv)
+                    e.capabilities[Capability.TANK]["current"] -= fuel_usage
             if isinstance(reason, Event):
                 if reason.evt == Event.NO_FUEL:
                     print(f"t={now} processing prediction: {actor.name} fuel exhaustion")
@@ -260,17 +270,17 @@ class Simulation:
             elif isinstance(reason, Command):
                 reason: Command = reason
                 if reason.cmd == Command.SCAN:
-                    range = 0
+                    scan_range = 0
                     if Capability.SCANNER in reason.actor.capabilities:
-                        range = self.rules.SCAN_RANGE
+                        scan_range = self.rules.SCAN_RANGE
                     elif Capability.DEEP_SPACE_SCANNER in reason.actor.capabilities:
-                        range = self.rules.DEEP_SCAN_RANGE
+                        scan_range = self.rules.DEEP_SCAN_RANGE
                     event_out = Event(reason.time, Event.SCAN, reason.actor, reason.parameters)
                     event_out.ok = True
-                    event_out.result = {'range': range, 'contacts':[]}
+                    event_out.result = {'range': scan_range, 'contacts':[]}
                     for e in self.entities:
                         contact = {}
-                        if e is not reason.actor and mag(e.r - actor.r) <= range:
+                        if e is not reason.actor and mag(e.r - actor.r) <= scan_range:
                             print(f"{actor.name} just saw {e.name} @ {mag(e.r - actor.r)}m away")
                             contact['name'] = e.name
                             contact['kinematics'] = {'r': e.r, 'v': e.v, 'a': e.a}
@@ -300,7 +310,7 @@ class Simulation:
                 elif reason.cmd == Command.LOAD:
                     print("executing load")
                     event_out = Event(reason.time, Event.LOAD, reason.actor, reason.parameters)
-                    target_candidates = tuple(filter(lambda e: mag(actor.r - e.r) <= self.rules.SCAN_RANGE, self.entities))
+                    target_candidates = tuple(filter(lambda ent: mag(actor.r - ent.r) <= self.rules.SCAN_RANGE, self.entities))
                     target = None
                     for tc in target_candidates:
                         if tc.name == reason.parameters["target"]:
@@ -312,6 +322,7 @@ class Simulation:
                         distance = mag(actor.r - target.r)
                         vel_diff = mag(actor.v - target.v)
                         print(actor.r, actor.v, distance)
+                        print(target.r, target.v, vel_diff)
                         ok = True
                         if distance > self.rules.INTERACTION_RANGE_LIMIT:
                             event_out.ok = ok = False
@@ -362,13 +373,39 @@ class Simulation:
                     invalidations.update(updates[1])
                     new_events.append(event_out)
                     print(event_out.ok, event_out.result)
+                elif reason.cmd == Command.FIRE:
+                    print("processing fire event")
+                    event_out = Event(reason.time, Event.FIRE, reason.actor, reason.parameters)
+                    actor = reason.actor
+                    if not actor.get_capability(Capability.BAY) or actor.get_capability(Capability.BAY)["current"] == 0:
+                        event_out.ok = False
+                        event_out.result['msg'] = "you have no torpedo bay or 0 torpedoes"
+                    else:
+                        # spawn torp and deplete supply
+                        ta, countdown = reason.parameters['a'], reason.parameters['countdown']
+                        if mag(ta) > self.rules.MAX_MISSILE_IMPULSE:
+                            ta = self.rules.MAX_MISSILE_IMPULSE * (ta / mag(ta))
+                            print(f"limited torpedo burn of {mag(ta)}m/s/s to {self.rules.MAX_MISSILE_IMPULSE}m/s/s")
+                        torpedo = actor.spawn_child("torpedo", ta, {Capability.DETONATE:{'countdown':countdown}})
+                        self.entities.append(torpedo)
+                        print(f"{actor.name} fired torpedo {torpedo.name}")
+                    fire_events = [event_out]
+                    if event_out.ok:
+                        spawn_event = Event(reason.time, Event.SPAWN, torpedo, {"parent": actor,
+                                        "kinematics":{'r': torpedo.r, 'v': torpedo.v, 'a': torpedo.a}})
+                        fire_events.append(spawn_event)
+                    updates = self.updated_predictions(fire_events)
+                    new_predictions.update(updates[0])
+                    invalidations.update(updates[1])
+                    new_events.extend(fire_events)
+
             # update state changes queue for this interval based on processed prediction's consequences
             for entity in destroyed_entities:
                 self.entities.remove(entity)
             for isc in invalidations:
                 try:
                     state_changes.remove(isc)
-                except:
+                except ValueError:
                     pass
             for p in new_predictions:
                 predicted_time = p[0]
@@ -382,6 +419,7 @@ class Simulation:
         for evt in new_events:
             for e in self.entities:
                 if (mag(evt.actor.r - e.r) <= self.rules.SCAN_RANGE) and (evt not in e.event_log):
+                    # todo: don't witness failed orders
                     e.witness_event(evt)
         self.events += new_events
         self.time = now

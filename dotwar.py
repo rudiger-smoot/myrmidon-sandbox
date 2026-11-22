@@ -28,7 +28,7 @@ with open(universe, 'r') as universe_file:
         er = np.array([float(r) for r in consttokens[2:2+3]])
         ev = np.array([float(v) for v in consttokens[5:5+3]])
         ea = np.array([float(a) for a in consttokens[8:8+3]])
-        eallegiance = consttokens[9]
+        eallegiance = consttokens[11]
         captokens = [token.upper() for token in tokens[12:]]
         capindex = 0
         while capindex < len(captokens):
@@ -69,9 +69,13 @@ if orders:
                     cargs["target"] = argtokens[0]
                 elif ctype == "SCAN":
                     ctype = Command.SCAN
+                elif ctype == "FIRE":
+                    ctype = Command.FIRE
+                    cargs["a"] = np.array([float(a) for a in argtokens[0:3]])
+                    cargs["countdown"] = float(argtokens[3])
                 else:
                     raise Exception(f"unknown command {ctype}")
-                actor = tuple(filter(lambda e: e.name == cvessel, entities))
+                actor = tuple(filter(lambda ent: ent.name == cvessel, entities))
                 if actor: actor = actor[0]
                 else:
                     raise Exception(f"no entity named {cvessel} for command {ln}")

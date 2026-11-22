@@ -3,3 +3,4 @@ limonite 26 LOAD stash
 limonite 30 BURN 0 25 0
 limonite 35 SCAN
 earth 36 SCAN
+limonite 40 FIRE 23 23 23 1
